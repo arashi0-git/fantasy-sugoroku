@@ -1,0 +1,12 @@
+# 使っている Action と npm の部品に更新（脆弱性の修正を含む）が出たら、プルリクエストで知らせる
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
