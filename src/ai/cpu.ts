@@ -82,7 +82,7 @@ export function decideCpu(s: GameState, pers: Personality, rand: Rand): Action {
     case 'gamble': {
       // 勝負は得なので、負けても余裕が残るとき、または払えないときの一発逆転で勝負する
       const lose = Math.round(ph.rent * CONFIG.gambleLose);
-      return { type: 'gamble', use: p.money - lose >= pers.reserve || p.money < ph.rent };
+      return { type: 'gamble', use: p.money - lose >= reserveOf(s, pers) || p.money < ph.rent };
     }
 
     case 'react':
@@ -193,7 +193,7 @@ function chooseAttackCard(s: GameState, pers: Personality): Action | null {
   }
 
   // 運命の賽：狙ったマスに止まる価値が、普通に振ったときよりかなり大きいときだけ（高いので温存する）
-  if (can('destiny') && p.money - CONFIG.destinyCost >= pers.reserve) {
+  if (can('destiny') && p.money - CONFIG.destinyCost >= reserveOf(s, pers)) {
     const values = Array.from({ length: 11 }, (_, i) => i + 2).map((n) => ({ n, v: squareValue(s, pers, (p.position + n) % BOARD.length) }));
     const expected = values.reduce((sum, x) => sum + x.v * combos(x.n), 0) / 36;
     const best = values.reduce((a, b) => (b.v > a.v ? b : a));
@@ -237,7 +237,7 @@ export function chooseRaid(s: GameState, pers: Personality): number | null {
     if (isTourist(sq) && touristCount(s, owner) >= TOURIST_SQUARES.length - 1) return 3;
     if (missionGain(s, p.id, sq) > 0 || (p.mission === 'raider' && !p.missionDone)) return 2;
     // 手札がいっぱいなら、稼ぎのいい土地も奪う
-    if (full && rentOf(s, sq) >= 500) return 1;
+    if (full && rentOf(s, sq) >= 500 && s.turn <= pers.buyoutUntil) return 1;
     return 0;
   };
   const targets = raidTargets(s).filter((sq) => score(sq) > 0);
@@ -297,6 +297,20 @@ function wantsGuard(s: GameState, pers: Personality, me: number): boolean {
   }
 }
 
+// ---------- 手元に残すお金 ----------
+
+/** 手元に残すお金：性格の基本額に、相手の土地の最高の通行料 × 危険への備え を足す */
+export function reserveOf(s: GameState, pers: Personality): number {
+  if (!pers.dangerFactor) return pers.reserve;
+  const me = actorOf(s);
+  let top = 0;
+  for (const [sq, prop] of Object.entries(s.properties)) {
+    if (prop.owner === me || s.players[prop.owner].bankrupt) continue;
+    top = Math.max(top, rentOf(s, Number(sq)));
+  }
+  return pers.reserve + pers.dangerFactor * top;
+}
+
 // ---------- 購入・建設・買収 ----------
 
 /** 余裕（reserve）を残して払える一番高い段階 */
@@ -312,20 +326,20 @@ function decideBuy(s: GameState, pers: Personality, sq: number): Action {
 
   // 秘密の使命が進む土地は、手元のお金を少し削ってでも買う
   if (missionGain(s, p.id, sq) > 0) {
-    const best = highestWithin(opts, p.money, pers.reserve);
+    const best = highestWithin(opts, p.money, reserveOf(s, pers));
     if (best) return { type: 'buy', level: best.level };
     if (p.money - price >= 100) return { type: 'buy', level: 0 };
   }
 
   if (pers.id === 'bold') {
-    const best = highestWithin(opts, p.money, pers.reserve);
+    const best = highestWithin(opts, p.money, reserveOf(s, pers));
     if (best) return { type: 'buy', level: best.level };
     return p.money - price >= 100 ? { type: 'buy', level: 0 } : { type: 'pass' };
   }
 
   if (pers.id === 'careful') {
     // 土地は積極的に買うが、建物は余裕を残してビルまで。手元のお金は多めに残す
-    const best = highestWithin(opts.filter((o) => o.level <= LEVEL.BUILDING), p.money, pers.reserve);
+    const best = highestWithin(opts.filter((o) => o.level <= LEVEL.BUILDING), p.money, reserveOf(s, pers));
     if (best) return { type: 'buy', level: best.level };
     return p.money - price >= 300 ? { type: 'buy', level: 0 } : { type: 'pass' };
   }
@@ -339,17 +353,17 @@ function decideBuy(s: GameState, pers: Personality, sq: number): Action {
   }
   const interest = groupInterest(s, sq);
   if (interest === 'complete') {
-    const best = highestWithin(opts, p.money, pers.reserve);
+    const best = highestWithin(opts, p.money, reserveOf(s, pers));
     return { type: 'buy', level: best?.level ?? 0 };
   }
   if (interest === 'block') return { type: 'buy', level: 0 };
   if (interest === 'open') {
-    const best = highestWithin(opts, p.money, pers.reserve);
+    const best = highestWithin(opts, p.money, reserveOf(s, pers));
     if (best) return { type: 'buy', level: best.level };
     return p.money - price >= 200 ? { type: 'buy', level: 0 } : { type: 'pass' };
   }
   // 他人もいる色グループも、余裕があればビルまでは買っておく（収入源になり、相手の独占も防げる）
-  const best = highestWithin(opts.filter((o) => o.level <= LEVEL.BUILDING), p.money, pers.reserve);
+  const best = highestWithin(opts.filter((o) => o.level <= LEVEL.BUILDING), p.money, reserveOf(s, pers));
   return best ? { type: 'buy', level: best.level } : { type: 'pass' };
 }
 
@@ -362,18 +376,18 @@ function decideBuild(s: GameState, pers: Personality, sq: number): Action {
   if (done) return { type: 'build', level: done.level };
 
   if (pers.id === 'bold') {
-    const best = highestWithin(opts, p.money, pers.reserve);
+    const best = highestWithin(opts, p.money, reserveOf(s, pers));
     return best ? { type: 'build', level: best.level } : { type: 'pass' };
   }
   if (pers.id === 'careful') {
     // 一度に2段階まで、手元のお金を残せる範囲で着実に建てる
     const prop = s.properties[sq];
-    const best = highestWithin(opts.filter((o) => o.level <= prop.level + 2), p.money, pers.reserve);
+    const best = highestWithin(opts.filter((o) => o.level <= prop.level + 2), p.money, reserveOf(s, pers));
     return best ? { type: 'build', level: best.level } : { type: 'pass' };
   }
   // 策士：建てられるだけ建てる。揃えかけの色グループの土地は、手元のお金を少し削ってでも建てる
   const strong = ownedInGroup(s, sq, p.id) >= 2;
-  const best = highestWithin(opts, p.money, strong ? pers.reserve / 2 : pers.reserve);
+  const best = highestWithin(opts, p.money, strong ? reserveOf(s, pers) / 2 : reserveOf(s, pers));
   return best ? { type: 'build', level: best.level } : { type: 'pass' };
 }
 
@@ -382,35 +396,31 @@ function decideBuyout(s: GameState, pers: Personality, sq: number): Action {
   const price = buyoutPrice(s, sq);
   const left = p.money - price;
   const prop = s.properties[sq];
+  const yes: Action = { type: 'buyout' };
+  const no: Action = { type: 'pass' };
 
-  if (pers.id === 'bold') return left >= pers.reserve ? { type: 'buyout' } : { type: 'pass' };
-
-  // 観光地の守り切りを止める、または買収で秘密の使命が進むなら買収する
-  if (s.touristClaim === prop.owner && isTourist(sq) && left >= 0) return { type: 'buyout' };
+  // ねらいのある買収：守り切りを止める・自分の色が揃う・相手の独占を崩す・使命が進む
+  if (s.touristClaim === prop.owner && isTourist(sq) && left >= 0) return yes;
+  const g = BOARD[sq].group;
+  const completesMine = !!g && isLand(sq) && GROUP_SQUARES[g].every((x) => x === sq || s.properties[x]?.owner === p.id);
+  const theirGroups = completedGroups(s, prop.owner);
+  const breaksReach = !!g && theirGroups.includes(g) && theirGroups.length >= TRIPLE_GROUPS - 1;
+  const touristReach = isTourist(sq) && touristCount(s, prop.owner) >= TOURIST_SQUARES.length - 1;
+  if ((completesMine || breaksReach || touristReach) && left >= 200) return yes;
   const raider = p.mission === 'raider' && !p.missionDone;
-  if ((missionGain(s, p.id, sq) > 0 || raider) && left >= 300) return { type: 'buyout' };
+  if ((missionGain(s, p.id, sq) > 0 || raider) && left >= 300) return yes;
 
+  // ふつうの買収：買収は払った額の半分しか資産に残らないので、終盤はしない
+  if (s.turn > pers.buyoutUntil) return no;
+  if (pers.id === 'bold') return left >= reserveOf(s, pers) ? yes : no;
   if (isTourist(sq)) {
-    // 観光地：相手があと1つで4つ揃うなら奪って止める。策士は自分が集めているときも奪う
-    const ownerReach = touristCount(s, prop.owner) >= TOURIST_SQUARES.length - 1;
     const collecting = pers.id === 'schemer' && touristCount(s, p.id) >= 2;
-    if ((ownerReach || collecting) && left >= 200) return { type: 'buyout' };
-    return left >= (pers.id === 'careful' ? 1500 : pers.reserve) ? { type: 'buyout' } : { type: 'pass' };
+    if (collecting && left >= 200) return yes;
+    return left >= (pers.id === 'careful' ? 1500 : reserveOf(s, pers)) ? yes : no;
   }
-
-  if (pers.id === 'careful') {
-    // 建物のある土地を、買収後も手元のお金を十分残せるときだけ
-    return prop.level >= LEVEL.VILLA && left >= 1000 ? { type: 'buyout' } : { type: 'pass' };
-  }
-
-  // 策士：自分の色グループが揃うなら、または相手の独占を崩せるなら少し無理をしてでも買収する
-  const g = BOARD[sq].group!;
-  const completesMine = GROUP_SQUARES[g].every((x) => x === sq || s.properties[x]?.owner === p.id);
-  const owner = prop.owner;
-  const theirGroups = completedGroups(s, owner);
-  const breaksReach = theirGroups.includes(g) && theirGroups.length >= TRIPLE_GROUPS - 1;
-  if ((completesMine || breaksReach) && left >= 200) return { type: 'buyout' };
-  return prop.level >= LEVEL.VILLA && left >= pers.reserve ? { type: 'buyout' } : { type: 'pass' };
+  // 慎重派は手元のお金を十分残せるときだけ。策士は建物のある土地を
+  if (pers.id === 'careful') return prop.level >= LEVEL.VILLA && left >= 1000 ? yes : no;
+  return prop.level >= LEVEL.VILLA && left >= reserveOf(s, pers) ? yes : no;
 }
 
 // ---------- レアキャラの特性 ----------
@@ -533,7 +543,7 @@ function squareValue(s: GameState, pers: Personality, sq: number): number {
     return -rent * { bold: 0.7, careful: 1.5, schemer: 1 }[pers.id];
   }
   if ((kind === 'land' || kind === 'tourist') && !prop) {
-    const affordable = landPrice(sq) + pers.reserve <= p.money;
+    const affordable = landPrice(sq) + reserveOf(s, pers) <= p.money;
     if (!affordable) return 0;
     if (missionGain(s, p.id, sq) > 0) return 120;
     if (pers.id === 'bold') return 40 + landPrice(sq) / 10;

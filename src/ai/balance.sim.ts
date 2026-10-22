@@ -9,7 +9,8 @@ import { nextRandom } from '../core/rng';
 import { CharacterId, CHARACTER_LIST, CHARACTERS } from '../data/characters';
 import { CARDS } from '../data/cards';
 import { BOARD } from '../data/board';
-import { GROUP_SQUARES } from '../core/game';
+import { GROUP_SQUARES, landPrice } from '../core/game';
+const GROUP_PRICE = landPrice;
 import { CONFIG } from '../data/config';
 import { MISSIONS } from '../data/missions';
 import { decideCpu } from './cpu';
@@ -83,6 +84,12 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
     // 固有特性の発動：キャラごとの回数。聞かれた回数（ask）と使った回数（use）も数える
     const traitHits: Record<string, number> = {};
     const traitAsk: Record<string, { ask: number; use: number; win: number }> = {};
+    // キャラごとの破産・最終資産、商魂と破魔の1回あたりの得
+    const charBankrupt: Record<string, number> = {};
+    const charAssets: Record<string, number> = {};
+    const merchantGain: number[] = [];
+    const pierceKind: Record<string, number> = {};
+    const pierceGain: number[] = [];
     const TRAIT_LOG: [RegExp, string][] = [
       [/商魂で/, 'merchant'], [/霧読みで/, 'fogsight'], [/祝福で .* が無料で/, 'blessing'], [/運命の石碑で.*がめくれた/, 'stargaze'],
       [/天翔で/, 'skyride'], [/旋風で/, 'gust'], [/破魔で/, 'pierce'], [/開拓/, 'pioneer'], [/剛腕で/, 'shove'],
@@ -125,6 +132,16 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
         if (s.phase.kind === 'react') L(s.phase.card).asked++;
         const next = applyAction(s, a);
         for (const e of next.log.slice(s.log.length)) {
+          if (e.player !== null && /商魂で/.test(e.text) && s.phase.kind === 'buyout') {
+            const sq = s.phase.square;
+            const lv = next.properties[sq]?.level ?? 0;
+            merchantGain.push(Math.round(GROUP_PRICE(sq) * CONFIG.buildCostRate[lv]));
+          }
+          if (e.player !== null && /破魔で/.test(e.text) && s.phase.kind === 'react') {
+            const ctx = s.phase.ctx;
+            pierceKind[ctx.type + ':' + s.phase.card] = (pierceKind[ctx.type + ':' + s.phase.card] ?? 0) + 1;
+            if (ctx.type === 'rent') pierceGain.push(ctx.rent);
+          }
           if (e.player === null) continue;
           const c = chars[e.player];
           for (const [re, t] of TRAIT_LOG) if (re.test(e.text) && CHARACTERS[c].trait.id === t) traitHits[c] = (traitHits[c] ?? 0) + 1;
@@ -209,6 +226,10 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
       charWins[chars[s.phase.winner]] = (charWins[chars[s.phase.winner]] ?? 0) + 1;
       seatWins[s.phase.winner]++;
       bankrupt += s.players.filter((p) => p.bankrupt).length;
+      s.players.forEach((p, i) => {
+        if (p.bankrupt) charBankrupt[chars[i]] = (charBankrupt[chars[i]] ?? 0) + 1;
+        charAssets[chars[i]] = (charAssets[chars[i]] ?? 0) + totalAssets(s, p.id);
+      });
       buyoutsDone += s.players.reduce((a, p) => a + p.record.buyouts, 0);
       s.players.forEach((p, i) => (laps[seats[i]] += p.laps));
       for (const t of [10, 15, 20]) {
@@ -257,6 +278,14 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
     console.log('  通行料の受け取り−支払い（1ゲーム）', seatRentGot.map((v, i) => Math.round((v - seatRentPaid[i]) / N)).join(' / '));
     BUCKETS.forEach(([lo, hi], b) => console.log(`  通行料の差し引き ターン${lo}〜${hi}`, seatRentBucket[b].map((v) => Math.round(v / N)).join(' / ')));
     for (const [r, v] of Object.entries(seatReason)) console.log(`  ${r} での勝ち`, v.join(' / '));
+    console.log('キャラごとの破産率 / 最後の総資産（平均）');
+    for (const c of CHARACTER_LIST) {
+      const n = charSeen[c.id] ?? 1;
+      console.log(`  ${c.name.padEnd(5, '　')} ${pct(charBankrupt[c.id] ?? 0, n).padStart(6)} / ${Math.round((charAssets[c.id] ?? 0) / n)}G`);
+    }
+    const avgOf = (a: number[]) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : 0);
+    console.log('商魂の1回あたりの得（無料の建設費）', avgOf(merchantGain), 'G');
+    console.log('破魔が無効にした場面', JSON.stringify(pierceKind), '／ 天使の加護を破ったときの通行料（平均）', avgOf(pierceGain), 'G');
     console.log('席順ごとの勝率', seatWins.map((w, i) => `${i + 1}番手 ${pct(w, N)}`).join(' / '));
     console.log('平均所持金 ターン1,10,20,29', [1, 10, 20, 29].map(avg).join(' / '));
     console.log('建設回数 1-10/11-20/21-30', [sum(1, 10), sum(11, 20), sum(21, 30)].map((v) => (v / N).toFixed(1)).join(' / '));

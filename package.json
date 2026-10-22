@@ -6,7 +6,8 @@
     "build": "tsc --noEmit && vite build",
     "build:single": "tsc --noEmit && vite build --mode single",
     "test": "vitest run",
-    "sim": "SIM=1 vitest run --silent=false"
+    "sim": "SIM=1 vitest run --silent=false",
+    "tune": "TUNE=1 vitest run --silent=false"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

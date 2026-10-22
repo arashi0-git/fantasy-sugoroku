@@ -60,14 +60,28 @@ describe('性格ごとの判断', () => {
     expect(decideCpu(s, PERSONALITIES.careful, always(0))).toEqual({ type: 'pass' });
   });
 
-  it('策士は、買収で自分の色グループが揃うなら少し無理をしても買収する', () => {
+  it('買収で自分の色グループが揃うなら、どの性格も少し無理をしてでも買収する。ねらいのない買収は慎重派はしない', () => {
     const s = newGame(1);
     s.players[0].money = 700;
     s.properties[1] = { owner: 0, level: 0 };
     s.properties[2] = { owner: 1, level: 1 }; // 買収価格 (100+50)×2 = 300
     s.phase = { kind: 'buyout', square: 2 };
     expect(decideCpu(s, PERSONALITIES.schemer, always(0))).toEqual({ type: 'buyout' });
+    expect(decideCpu(s, PERSONALITIES.careful, always(0))).toEqual({ type: 'buyout' });
+    s.properties[1] = { owner: 2, level: 0 };
     expect(decideCpu(s, PERSONALITIES.careful, always(0))).toEqual({ type: 'pass' });
+  });
+
+  it('終盤（buyoutUntil を過ぎたら）は、ねらいのない買収をしない', () => {
+    const s = newGame(1);
+    s.players[0].money = 3000;
+    s.properties[5] = { owner: 1, level: 1 };
+    s.phase = { kind: 'buyout', square: 5 };
+    const late = { ...PERSONALITIES.bold, buyoutUntil: 20 };
+    s.turn = 10;
+    expect(decideCpu(s, late, always(0))).toEqual({ type: 'buyout' });
+    s.turn = 25;
+    expect(decideCpu(s, late, always(0))).toEqual({ type: 'pass' });
   });
 
   it('お金に余裕がないとき、慎重派は霧の孤島に居座り、積極派は脱出料を払う', () => {
