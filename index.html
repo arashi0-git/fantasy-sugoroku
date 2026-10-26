@@ -23,6 +23,12 @@
         <div class="sound-bar">
           <button type="button" id="soundbtn" aria-pressed="true">🔊 効果音オン</button>
         </div>
+        <div class="speed-bar" id="speedbar" role="group" aria-label="CPUの速度">
+          <span class="speed-label">速度</span>
+          <button type="button" data-speed="normal">ふつう</button>
+          <button type="button" data-speed="fast">速い</button>
+          <button type="button" data-speed="skip">スキップ</button>
+        </div>
         <section class="dock" id="dock" aria-label="操作" aria-live="polite"></section>
         <section class="hand" id="hand" aria-label="あなたの手札"></section>
         <ol class="players" id="players" aria-label="プレイヤー"></ol>
