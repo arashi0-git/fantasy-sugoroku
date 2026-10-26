@@ -26,7 +26,40 @@ const SPEECH_MS = 1400;
 const CPU_RESULT_MS = 600;
 
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const wait = (ms: number) => new Promise((r) => setTimeout(r, reducedMotion ? Math.min(ms, 120) : ms));
+
+/** CPUの手番の速度（ふつう／速い／スキップ）。待ち時間を倍率で縮める */
+type SpeedMode = 'normal' | 'fast' | 'skip';
+const SPEED_FACTOR: Record<SpeedMode, number> = { normal: 1, fast: 0.35, skip: 0.02 };
+let speedMode: SpeedMode = 'normal';
+try {
+  const saved = window.localStorage.getItem('fs-speed');
+  if (saved === 'fast' || saved === 'skip') speedMode = saved;
+} catch {
+  /* 保存できない環境ではふつうのまま */
+}
+const wait = (ms: number) =>
+  new Promise((r) => setTimeout(r, reducedMotion ? Math.min(ms * SPEED_FACTOR[speedMode], 120) : ms * SPEED_FACTOR[speedMode]));
+
+/** 速度ボタンの見た目と保存を現在のモードに合わせる */
+function syncSpeedBar() {
+  document.querySelectorAll<HTMLButtonElement>('#speedbar button').forEach((b) => {
+    const active = b.dataset.speed === speedMode;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-pressed', String(active));
+  });
+}
+document.querySelectorAll<HTMLButtonElement>('#speedbar button').forEach((b) => {
+  b.addEventListener('click', () => {
+    speedMode = (b.dataset.speed as SpeedMode) || 'normal';
+    try {
+      window.localStorage.setItem('fs-speed', speedMode);
+    } catch {
+      /* 保存できなくても切り替え自体は有効 */
+    }
+    syncSpeedBar();
+  });
+});
+syncSpeedBar();
 
 let state: GameState;
 let extras: ViewExtras;
