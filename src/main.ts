@@ -6,6 +6,7 @@ import { cpuLine } from './ai/speech';
 import { PERSONALITIES, Personality } from './ai/personality';
 import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
 import { View, ViewExtras } from './ui/view';
+import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
 
 // あなたの席（順番）はゲームごとにランダム。あなただけ人間が操作し、残りの3人はCPUが動かす
 let HUMAN = 0;
@@ -144,6 +145,7 @@ async function act(action: Action) {
     }
     throw e;
   }
+  playForLog(next.log.slice(state.log.length).map((e) => e.text), action.type);
   const gen = generation;
   extras.busy = true;
 
@@ -186,9 +188,17 @@ async function act(action: Action) {
   view.render(state, extras);
 }
 
-/** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
-function boot() {
-  view.showTitle(document.getElementById('title')!, start);
+/** 効果音のオン／オフボタン */
+const soundBtn = document.getElementById('soundbtn') as HTMLButtonElement | null;
+function syncSoundBtn() {
+  if (!soundBtn) return;
+  soundBtn.textContent = soundEnabled() ? '🔊 効果音オン' : '🔇 効果音オフ';
+  soundBtn.setAttribute('aria-pressed', String(soundEnabled()));
 }
+soundBtn?.addEventListener('click', () => {
+  setSoundEnabled(!soundEnabled());
+  syncSoundBtn();
+});
+syncSoundBtn();
 
-boot();
+start();
