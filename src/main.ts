@@ -201,4 +201,9 @@ soundBtn?.addEventListener('click', () => {
 });
 syncSoundBtn();
 
-start();
+/** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
+function boot() {
+  view.showTitle(document.getElementById('title')!, start);
+}
+
+boot();
