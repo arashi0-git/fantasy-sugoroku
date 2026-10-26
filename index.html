@@ -13,12 +13,16 @@
     />
   </head>
   <body>
+    <section class="title-screen" id="title" hidden aria-label="タイトル"></section>
     <section class="select" id="select" hidden aria-label="キャラクター選択"></section>
     <main class="app">
       <section class="board" id="board" aria-label="盤面">
         <div class="center" id="center"></div>
       </section>
       <aside class="side">
+        <div class="sound-bar">
+          <button type="button" id="soundbtn" aria-pressed="true">🔊 効果音オン</button>
+        </div>
         <div class="speed-bar" id="speedbar" role="group" aria-label="CPUの速度">
           <span class="speed-label">速度</span>
           <button type="button" data-speed="normal">ふつう</button>
