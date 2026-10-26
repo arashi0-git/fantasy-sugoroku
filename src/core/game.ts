@@ -358,12 +358,18 @@ export function touristCount(state: GameState, playerId: number): number {
   return ownedSquares(state, playerId).filter(isTourist).length;
 }
 
+/** ラストスパート中かどうか（残り lastSpurtTurns ターン） */
+export function isLastSpurt(state: GameState): boolean {
+  return state.turn > state.maxTurns - CONFIG.lastSpurtTurns;
+}
+
 export function rentOf(state: GameState, square: number): number {
   const prop = state.properties[square];
   if (!prop) return 0;
   const owner = state.players[prop.owner];
   const prestige = 1 + statMod(owner, 'prestige');
-  if (isTourist(square)) return Math.round(CONFIG.touristRent[touristCount(state, prop.owner)] * prestige);
+  const spurt = isLastSpurt(state) ? CONFIG.lastSpurtRate : 1;
+  if (isTourist(square)) return Math.round(CONFIG.touristRent[touristCount(state, prop.owner)] * prestige * spurt);
   let rent = rentAt(square, prop.level) * prestige;
   if (state.festivals.includes(square)) {
     rent *= hasTrait(owner, 'festival') ? CONFIG.mishaFestivalMultiplier : CONFIG.festivalMultiplier;
@@ -377,7 +383,7 @@ export function rentOf(state: GameState, square: number): number {
   if (g && hasTrait(owner, 'formation') && GROUP_SQUARES[g].every((sq) => state.properties[sq]?.owner === prop.owner)) {
     rent *= CONFIG.formationRate;
   }
-  return Math.round(rent);
+  return Math.round(rent * spurt);
 }
 
 /** square を含む、同じ持ち主の土地が盤面で何マス続いているか（土地以外のマスで途切れる） */
@@ -1873,6 +1879,9 @@ function endTurn(s: GameState) {
     }
     s.turn += 1;
     log(s, null, `ターン${s.turn}：順番は ${roundOrder(s.turn, n).filter((x) => !s.players[x].bankrupt).map((x) => s.players[x].name).join(' → ')}`);
+    if (s.turn === s.maxTurns - CONFIG.lastSpurtTurns + 1) {
+      log(s, null, `ラストスパート！ 残り${CONFIG.lastSpurtTurns}ターン、通行料が${CONFIG.lastSpurtRate}倍になった`);
+    }
   }
   s.current = i;
   s.phase = s.players[i].travelPending ? { kind: 'travel' } : { kind: 'roll' };
