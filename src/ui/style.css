@@ -408,6 +408,57 @@ button:focus-visible {
   color: var(--brass);
 }
 
+/* 大きな支払いは一目で分かるように強く出す */
+.notice.pay.big {
+  font-size: 17px;
+  font-weight: 700;
+  padding: 9px 18px;
+  background: rgb(199 154 59 / 0.32);
+  box-shadow: 0 0 0 2px var(--brass-deep);
+}
+.notice.pay.big strong {
+  font-size: 20px;
+}
+
+/* いちばん新しい出来事の帯（中央パネルの上部に常時表示） */
+.event-banner {
+  margin: 0;
+  max-width: 100%;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border-left: 5px solid var(--brass);
+  background: rgb(10 14 30 / 0.55);
+  color: var(--on-table);
+  font-size: 15.5px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: left;
+}
+.event-banner .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c, transparent);
+  margin-right: 7px;
+}
+
+/* あなたの番は金色で示す */
+.whose.mine {
+  color: var(--brass);
+  font-weight: 800;
+}
+
+/* ログの最新行を目立たせる */
+.log li.latest {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--on-table);
+  background: rgb(199 154 59 / 0.12);
+  border-radius: 4px;
+  padding-left: 6px;
+}
+
 .tile .lv {
   display: flex;
   gap: 2px;
@@ -1047,6 +1098,12 @@ button.hand-card:hover:not(:disabled) {
   }
   .tile .sub {
     display: none;
+  }
+  /* スマホでも、誰の土地で通行料がいくらかは見えるようにする */
+  .tile.owned .sub {
+    display: block;
+    font-size: 9px;
+    line-height: 1.3;
   }
   .title,
   .gauge-wrap .hint {
