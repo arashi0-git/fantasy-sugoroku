@@ -1246,6 +1246,44 @@ export class View {
     return row;
   }
 
+  /** 起動直後のタイトル画面。「はじめる」でキャラ選びへ進む */
+  showTitle(host: HTMLElement, onStart: () => void) {
+    host.replaceChildren();
+    host.hidden = false;
+    const wrap = el('div', 'title-wrap');
+    wrap.append(el('p', 'title-kicker', 'すごろく型・資産ゲーム'));
+    wrap.append(el('h1', 'title-logo', 'ファンタジーすごろく'));
+    wrap.append(el('p', 'title-tagline', '土地を買って、建てて、独占を狙え。'));
+    const icons = el('p', 'title-icons');
+    icons.append(el('span', '', '🎲'), el('span', '', '🏰'), el('span', '', '🪙'));
+    wrap.append(icons);
+    const startBtn = el('button', 'title-start', 'ゲームをはじめる');
+    startBtn.addEventListener('click', () => {
+      host.hidden = true;
+      onStart();
+    });
+    wrap.append(startBtn);
+    const howBtn = el('button', 'title-how', 'あそびかた');
+    const how = el('div', 'title-rules');
+    how.hidden = true;
+    const rules = [
+      'あなたとCPU3人の4人対戦。30ターンで決着します。',
+      'ゲージを止めてサイコロを振り、止まった土地を買って建物を建てよう。',
+      '他人の土地に止まると通行料。同じ色の土地を揃えると独占ボーナス！',
+      '色グループ3つの独占・観光地4つの独占・最後の1人になると即勝利。',
+      '手札カードと、あなただけの「秘密の使命」（達成で+1,000G）を使いこなそう。',
+    ];
+    const ul = el('ul', 'title-rule-list');
+    for (const r of rules) ul.append(el('li', '', r));
+    how.append(ul);
+    howBtn.addEventListener('click', () => {
+      how.hidden = !how.hidden;
+    });
+    wrap.append(howBtn, how);
+    wrap.append(el('p', 'title-foot', '© AGameLab'));
+    host.append(wrap);
+  }
+
   /** ゲーム開始前のキャラ選び */
   showCharacterSelect(host: HTMLElement, onPick: (id: CharacterId) => void) {
     host.replaceChildren();
