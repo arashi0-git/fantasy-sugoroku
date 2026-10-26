@@ -14,13 +14,15 @@ const SEAT_COLORS = ['#d8453a', '#3a74d8', '#e0ad1f', '#2f9e57'];
 /** 席ごとの CPU の性格（人間の席は null）。キャラを選んだときに決まる */
 let SEAT_PERSONALITY: (Personality | null)[] = [];
 
-const STEP_MS = 140;
-const ROLL_MS = 550;
+const STEP_MS = 170;
+const ROLL_MS = 650;
 const WARP_MS = 350;
 /** CPU が1つ行動するまでの間（何をしたか目で追えるように） */
-const CPU_THINK_MS = 700;
+const CPU_THINK_MS = 1000;
 /** CPU が一言しゃべったあと、読めるように待つ時間 */
-const SPEECH_MS = 1100;
+const SPEECH_MS = 1400;
+/** CPU の行動の結果（出来事の帯や通知）を読むための間 */
+const CPU_RESULT_MS = 600;
 
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const wait = (ms: number) => new Promise((r) => setTimeout(r, reducedMotion ? Math.min(ms, 120) : ms));
@@ -124,7 +126,9 @@ async function runCpu() {
       extras.speech = null;
     }
     await act(action);
-    if (line && gen === generation) await wait(SPEECH_MS);
+    if (gen !== generation) return;
+    // 行動の結果を読む間。一言があったときは吹き出し分、長めに待つ
+    await wait(line ? SPEECH_MS : CPU_RESULT_MS);
   }
 }
 

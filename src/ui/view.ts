@@ -361,6 +361,7 @@ export class View {
     if (s.phase.kind === 'react' && s.phase.responder !== s.current) {
       whose.classList.add('interrupt');
     }
+    if (!isCpu) whose.classList.add('mine');
     const dot = el('span', 'dot');
     dot.style.setProperty('--c', me.color);
     whose.append(dot, isCpu ? `${me.name} の番（CPU）` : `${me.name} の番`);
@@ -368,6 +369,10 @@ export class View {
     c.append(this.orderBar(s, x));
 
     c.append(this.dice(x));
+
+    // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）
+    const banner = this.eventBanner(s, x);
+    if (banner) c.append(banner);
 
     // CPU の一言（演出中も出す）
     // カードの結果が同じ人のものなら、吹き出しの下にまとめて場所を節約する
@@ -410,7 +415,7 @@ export class View {
       const card = c.querySelector(':scope > .card-notice:not(.mission)');
       if (card && s.lastCard && s.lastCard.player !== s.current) card.remove();
       if (c.scrollHeight > c.clientHeight + 1) {
-        const keep = new Set(['title', 'turn', 'whose', 'dice']);
+        const keep = new Set(['title', 'turn', 'whose', 'dice', 'event-banner']);
         for (const node of [...c.children]) {
           if (![...node.classList].some((k) => keep.has(k))) this.dockEl.append(node);
         }
@@ -991,9 +996,24 @@ export class View {
     return `${square.name}・${KIND_LABEL[square.kind]}`;
   }
 
+  /** いちばん新しいログを目立つ帯で出す。秘密の内容は本人にだけ見せる（ログと同じ扱い） */
+  private eventBanner(s: GameState, x: ViewExtras): HTMLElement | null {
+    const e = s.log[s.log.length - 1];
+    if (!e) return null;
+    const text = e.secret && e.player === x.human ? e.secret : e.text;
+    const n = el('p', 'event-banner');
+    const dot = el('span', 'dot');
+    if (e.player !== null) {
+      dot.style.setProperty('--c', s.players[e.player].color);
+      n.append(dot);
+    }
+    n.append(text);
+    return n;
+  }
+
   private paymentNotice(s: GameState): HTMLElement {
     const pay = s.lastPayment!;
-    const n = el('p', 'notice pay');
+    const n = el('p', 'notice pay' + (pay.amount >= 1000 ? ' big' : ''));
     n.append(
       `${s.players[pay.payer].name} が ${s.players[pay.payee].name} に `,
       el('strong', '', fmt(pay.amount)),
@@ -1278,8 +1298,8 @@ export class View {
     while (k < says.length) rows.push({ player: says[k].player, text: `「${says[k++].text}」`, say: true });
     const items = rows.slice(-90).reverse();
     this.logEl.replaceChildren(
-      ...items.map((e) => {
-        const li = el('li', e.say ? 'say-log' : '');
+      ...items.map((e, idx) => {
+        const li = el('li', (e.say ? 'say-log' : '') + (idx === 0 ? ' latest' : ''));
         const dot = el('span', 'dot');
         if (e.player !== null) dot.style.setProperty('--c', s.players[e.player].color);
         li.append(dot, e.say && e.player !== null ? `${s.players[e.player].name}${e.text}` : e.text);
