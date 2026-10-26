@@ -19,6 +19,9 @@ export const CONFIG = {
   /** 総資産の順位が下の人の給料倍率（[最下位, 下から2番目, …]。首位と同点の人にはかからない） */
   rankSalaryRates: [2] as readonly number[],
   maxTurns: 30,
+  /** ラストスパート：残りこのターン数になると、通行料が lastSpurtRate 倍になる */
+  lastSpurtTurns: 5,
+  lastSpurtRate: 1.2,
   /** 各段階を建てる費用 = 土地価格 × この値（添字が段階） */
   buildCostRate: [0, 0.5, 1.0, 1.5, 2.0],
   /** 通行料 = 土地価格 × この値（添字が段階）。ホテル・ランドマークは破産の緊張感が出るよう高め */

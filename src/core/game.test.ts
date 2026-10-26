@@ -25,6 +25,7 @@ import {
   raidPrice,
   raidTargets,
   roundOrder,
+  isLastSpurt,
   rentOf,
   rollDice,
   salaryFor,
@@ -237,6 +238,19 @@ describe('建物', () => {
     expect(s.players[0].money).toBe(3000 - 350);
     expect(investedValue(s, 5)).toBe(350);
     expect(rentOf(s, 5)).toBe(210);
+  });
+
+  it('ラストスパート（残り5ターン）は通行料が1.2倍になる', () => {
+    let s = rollTo(newGame(1), 5);
+    s = applyAction(s, { type: 'buy', level: 2 });
+    expect(isLastSpurt(s)).toBe(false);
+    expect(rentOf(s, 5)).toBe(210);
+    s.turn = s.maxTurns - CONFIG.lastSpurtTurns; // 残り6ターンの時点ではまだ
+    expect(isLastSpurt(s)).toBe(false);
+    expect(rentOf(s, 5)).toBe(210);
+    s.turn = s.maxTurns - CONFIG.lastSpurtTurns + 1; // 残り5ターンで開始
+    expect(isLastSpurt(s)).toBe(true);
+    expect(rentOf(s, 5)).toBe(Math.round(210 * CONFIG.lastSpurtRate));
   });
 
   it('スタートを通過したあとはホテルまで建てられる', () => {
