@@ -186,4 +186,9 @@ async function act(action: Action) {
   view.render(state, extras);
 }
 
-start();
+/** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
+function boot() {
+  view.showTitle(document.getElementById('title')!, start);
+}
+
+boot();
