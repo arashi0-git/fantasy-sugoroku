@@ -97,6 +97,7 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
       [/商魂で/, 'merchant'], [/霧読みで/, 'fogsight'], [/祝福で .* が無料で/, 'blessing'], [/運命の石碑で.*がめくれた/, 'stargaze'],
       [/天翔で/, 'skyride'], [/旋風で/, 'gust'], [/破魔で/, 'pierce'], [/開拓/, 'pioneer'], [/剛腕で/, 'shove'],
       [/大勝負！/, 'gamble'], [/操り糸で/, 'puppet'], [/写し身で/, 'mimic'],
+      [/巻き戻しで/, 'rewind'], [/魂の抵当で/, 'soulpact'],
     ];
     // 席順の分析：ターンごとの土地の数・総資産、勝ち方ごとの勝ち数、最初の5ターンで買った土地の数
     const seatLands: Record<number, number[]> = { 3: [0, 0, 0, 0], 5: [0, 0, 0, 0], 10: [0, 0, 0, 0], 20: [0, 0, 0, 0] };

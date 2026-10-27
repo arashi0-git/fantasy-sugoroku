@@ -10,6 +10,7 @@ import {
   canFly,
   canOfferTrade,
   cardUsable,
+  curseTargets,
   flyTargets,
   investedValue,
   islandImmune,
@@ -38,10 +39,16 @@ import {
   ownedSquares,
   ownsAllTourist,
   rankByAssets,
+  relocateDests,
+  relocateSources,
   rentAt,
   rentOf,
+  sanctuaryTargets,
   sealTargets,
   sellValue,
+  stealTargets,
+  swapGiveTargets,
+  swapWantTargets,
   tradeValueOf,
   touristCount,
   TOURIST_SQUARES,
@@ -73,6 +80,9 @@ export function decideCpu(s: GameState, pers: Personality, rand: Rand): Action {
       if (p.islandTurns > 0 && wantsEscape(s, pers)) return { type: 'payEscape' };
       return { type: 'roll', aim: chooseAim(s, pers, rand) };
     }
+
+    case 'reroll':
+      return { type: 'reroll', use: shouldReroll(s, ph.dice, ph.sum) };
 
     case 'trade':
       return { type: 'answerTrade', accept: acceptsTrade(s, pers, rand) };
@@ -147,12 +157,12 @@ export function decideCpu(s: GameState, pers: Personality, rand: Rand): Action {
 /** カードの価値（性格ごと）。手札に同じカードが多いほど下がる */
 function cardValue(pers: Personality, card: CardId, otherHand: CardId[]): number {
   const base: Record<CardId, number> = {
-    destiny: 9, raid: 8, seal: 7, barrier: 7, mirror: 6, earthquake: 6, angel: 6, growth: 6, tailwind: 5, festival: 5, treasure: 3, tax: 0, fog: 0,
+    destiny: 9, raid: 8, seal: 7, swap: 7, barrier: 7, mirror: 6, earthquake: 6, angel: 6, growth: 6, steal: 6, curse: 6, sanctuary: 5, tailwind: 5, festival: 5, relocate: 5, treasure: 3, tax: 0, fog: 0,
   };
   const bonus: Record<string, Partial<Record<CardId, number>>> = {
-    bold: { earthquake: 2, seal: 1, treasure: 1, raid: 1 },
-    careful: { angel: 3, barrier: 2, mirror: 1 },
-    schemer: { seal: 2, destiny: 1, barrier: 1, raid: 2 },
+    bold: { earthquake: 2, seal: 1, treasure: 1, raid: 1, steal: 1, curse: 1 },
+    careful: { angel: 3, barrier: 2, mirror: 1, sanctuary: 2 },
+    schemer: { seal: 2, destiny: 1, barrier: 1, raid: 2, swap: 2, relocate: 1 },
   };
   const dup = otherHand.filter((c) => c === card).length;
   return base[card] + (bonus[pers.id][card] ?? 0) - dup * 1.5;
@@ -188,6 +198,13 @@ function chooseAttackCard(s: GameState, pers: Personality): Action | null {
     if (target !== null) return { type: 'useCard', card: 'raid', square: target };
   }
 
+  // 交換の契約書：自分の色が揃う・観光地が揃う・相手の独占を崩せる交換だけする。
+  // 対価に出す土地は、自分の揃えかけの色グループや集めている観光地にはしない
+  if (can('swap')) {
+    const swap = chooseSwap(s, pers);
+    if (swap) return { type: 'useCard', card: 'swap', square: swap.want, give: swap.give };
+  }
+
   // 地震：ここぞという大物（通行料の高い建物）や、独占リーチの相手の土地まで取っておく。
   // 手札がいっぱいなら小物にも使う。策士は首位の土地も優先
   if (can('earthquake')) {
@@ -199,6 +216,15 @@ function chooseAttackCard(s: GameState, pers: Personality): Action | null {
     const preferred = big.filter((sq) => pers.id === 'schemer' && s.properties[sq].owner === leader);
     const pool = urgent.length ? urgent : preferred.length ? preferred : big;
     if (pool.length) return { type: 'useCard', card: 'earthquake', square: maxBy(pool, (sq) => rentOf(s, sq)) };
+  }
+
+  // 呪いの刻印：通行料の高い大物や、独占リーチの相手の稼ぎ頭に付ける
+  if (can('curse')) {
+    const need = { bold: 500, careful: 800, schemer: 500 }[pers.id];
+    const targets = curseTargets(s).filter(
+      (sq) => rentOf(s, sq) >= need || s.properties[sq].level >= LEVEL.LANDMARK || reach.includes(s.properties[sq].owner),
+    );
+    if (targets.length) return { type: 'useCard', card: 'curse', square: maxBy(targets, (sq) => rentOf(s, sq)) };
   }
 
   // 運命の賽：狙ったマスに止まる価値が、普通に振ったときよりかなり大きいときだけ（高いので温存する）
@@ -227,9 +253,98 @@ function chooseAttackCard(s: GameState, pers: Personality): Action | null {
     return { type: 'useCard', card: 'growth', square: best };
   }
 
+  // 聖域の紋章：守り切り中の観光地や、揃えた・揃えかけの色グループの稼ぎ頭を守る
+  if (can('sanctuary')) {
+    const mine = sanctuaryTargets(s);
+    const key = mine.filter(
+      (sq) =>
+        (isTourist(sq) && (s.touristClaim === p.id || touristCount(s, p.id) >= TOURIST_SQUARES.length - 1)) ||
+        (isLand(sq) && ownedInGroup(s, sq, p.id) >= 2),
+    );
+    if (key.length) return { type: 'useCard', card: 'sanctuary', square: maxBy(key, (sq) => rentOf(s, sq)) };
+  }
+
+  // 移築の書：建物を、自分の土地が集まっている色グループや連続した土地へ寄せると得なとき
+  if (can('relocate')) {
+    const move = chooseRelocate(s);
+    if (move) return { type: 'useCard', card: 'relocate', square: move.dest, give: move.src };
+  }
+
+  // 盗賊の手：手札を溜めている相手（とくに首位や独占リーチ）から奪う
+  if (can('steal')) {
+    const targets = stealTargets(s).filter((id) => s.players[id].hand.length >= 3 || (s.players[id].hand.length >= 2 && reach.includes(id)));
+    if (targets.length) {
+      const target = maxBy(targets, (id) => s.players[id].hand.length * 10 + (rankByAssets(s)[0] === id ? 5 : 0));
+      return { type: 'useCard', card: 'steal', target };
+    }
+  }
+
   // 宝箱：持っていても得はないので、他に使うカードがなければ開ける
   if (can('treasure')) return { type: 'useCard', card: 'treasure' };
   return null;
+}
+
+/** 交換の契約書で得になる組み合わせ。なければ null */
+function chooseSwap(s: GameState, pers: Personality): { give: number; want: number } | null {
+  const p = s.players[s.current];
+  const reach = reachPlayers(s);
+  const score = (give: number, want: number): number => {
+    const owner = s.properties[want].owner;
+    // 対価の土地が自分の計画に要るものなら、その交換はしない
+    if (isKeptForPlan(s, give, p.id)) return 0;
+    // 同じ色グループ同士・観光地同士の交換は、揃い具合が変わらないのでしない
+    if (BOARD[give].group && BOARD[give].group === BOARD[want].group) return 0;
+    if (isTourist(give) && isTourist(want)) return 0;
+    const g = BOARD[want].group;
+    // 欲しい土地で自分の色グループが揃う
+    if (g && isLand(want) && GROUP_SQUARES[g].every((x) => x === want || s.properties[x]?.owner === p.id)) return 5;
+    // 欲しい土地で観光地が全部揃う
+    if (isTourist(want) && touristCount(s, p.id) >= TOURIST_SQUARES.length - 1) return 5;
+    // 相手の完成した色グループや守り切りを崩す
+    if (g && completedGroups(s, owner).includes(g) && reach.includes(owner)) return 4;
+    if (isTourist(want) && s.touristClaim === owner) return 4;
+    // 使命が進む・揃えかけの色が進む
+    if (missionGain(s, p.id, want) > 0) return 2;
+    if (g && isLand(want) && ownedInGroup(s, want, p.id) >= 1 && pers.id === 'schemer') return 2;
+    return 0;
+  };
+  let best: { give: number; want: number; v: number } | null = null;
+  for (const give of swapGiveTargets(s)) {
+    for (const want of swapWantTargets(s, give)) {
+      const v = score(give, want) * 10000 + rentOf(s, want) - rentOf(s, give);
+      if (v > 0 && (!best || v > best.v)) best = { give, want, v };
+    }
+  }
+  return best ? { give: best.give, want: best.want } : null;
+}
+
+/** 移築の書で得になる移し方。なければ null（建物を、仲間の多い色グループ・連続の土地へ寄せる） */
+function chooseRelocate(s: GameState): { src: number; dest: number } | null {
+  const p = s.players[s.current];
+  let best: { src: number; dest: number; v: number } | null = null;
+  for (const src of relocateSources(s)) {
+    for (const dest of relocateDests(s, src)) {
+      // 移し先の色グループに自分の土地が多いほど、連続ボーナスや布陣に乗りやすい
+      const v = ownedInGroup(s, dest, p.id) * 2 - ownedInGroup(s, src, p.id);
+      if (v >= 2 && (!best || v > best.v)) best = { src, dest, v };
+    }
+  }
+  return best ? { src: best.src, dest: best.dest } : null;
+}
+
+/** 巻き戻し：いまの目で進む先が悪いときだけ振り直す */
+function shouldReroll(s: GameState, dice: [number, number], sum: number): boolean {
+  const p = s.players[s.current];
+  // ゾロ目があと1回続くと霧の孤島行きになる出目は避ける
+  if (dice[0] === dice[1] && s.doublesInRow >= CONFIG.doublesToIsland - 1) return true;
+  const dest = (p.position + sum) % BOARD.length;
+  if (BOARD[dest].kind === 'island') return !islandImmune(p);
+  const prop = s.properties[dest];
+  if ((BOARD[dest].kind === 'land' || BOARD[dest].kind === 'tourist') && prop && prop.owner !== p.id) {
+    const rent = rentOf(s, dest);
+    return rent >= 600 || rent > p.money * 0.3;
+  }
+  return false;
 }
 
 /** 略奪の令状で奪う土地。奪う価値のある土地がなければ null */

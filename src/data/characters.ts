@@ -10,6 +10,8 @@ export type CharacterId =
   | 'ord'
   | 'crow'
   | 'garm'
+  | 'verre'
+  | 'rosso'
   // ここからレア
   | 'tsumuji'
   | 'azuma'
@@ -17,7 +19,9 @@ export type CharacterId =
   | 'garou'
   | 'karuta'
   | 'kugutsu'
-  | 'echo';
+  | 'echo'
+  | 'chrono'
+  | 'mors';
 
 export type StatId = 'income' | 'build' | 'deal' | 'prestige' | 'luck';
 
@@ -30,13 +34,17 @@ export type TraitId =
   | 'stargaze'
   | 'quickhand'
   | 'skyride'
+  | 'alchemy'
+  | 'voyage'
   | 'gust'
   | 'pierce'
   | 'pioneer'
   | 'shove'
   | 'gamble'
   | 'puppet'
-  | 'mimic';
+  | 'mimic'
+  | 'rewind'
+  | 'soulpact';
 
 export type PersonalityId = 'bold' | 'careful' | 'schemer';
 
@@ -144,6 +152,24 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     trait: { id: 'skyride', name: '天翔', text: '2周に1回、300G払ってサイコロの代わりに好きなマスへ飛べる（始まりの門を越えれば給料）' },
     personality: 'schemer',
   },
+  verre: {
+    id: 'verre',
+    name: 'ヴェル',
+    title: '錬金術師',
+    color: '#0e7c86',
+    stats: { income: 4, build: 4, deal: 2, prestige: 3, luck: 2 },
+    trait: { id: 'alchemy', name: '黄金変換', text: '土地を銀行に売るとき、通常は投資額の半額のところを、投資額の全額で売れる' },
+    personality: 'bold',
+  },
+  rosso: {
+    id: 'rosso',
+    name: 'ロッソ',
+    title: '海賊船長',
+    color: '#2b4c7e',
+    stats: { income: 4, build: 2, deal: 4, prestige: 3, luck: 2 },
+    trait: { id: 'voyage', name: '大航海', text: '自分の観光地の通行料が+50%。観光地を買収するときの価格が2割引になる' },
+    personality: 'bold',
+  },
 
   // ---------- レア ----------
   tsumuji: {
@@ -214,6 +240,26 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     stats: { income: 3, build: 3, deal: 3, prestige: 3, luck: 3 },
     trait: { id: 'mimic', name: '写し身', text: '他のプレイヤーが攻めのカードを使うと、25%で同じカードを1枚もらう' },
     personality: 'careful',
+    rare: true,
+  },
+  chrono: {
+    id: 'chrono',
+    name: 'クロノ',
+    title: '時の魔導士',
+    color: '#6d28a8',
+    stats: { income: 3, build: 3, deal: 3, prestige: 2, luck: 4 },
+    trait: { id: 'rewind', name: '巻き戻し', text: '1周に1回、サイコロを振り直せる（振り直した目を採用する。霧の孤島にいるときは使えない）' },
+    personality: 'schemer',
+    rare: true,
+  },
+  mors: {
+    id: 'mors',
+    name: 'モルス',
+    title: '死霊術師',
+    color: '#374151',
+    stats: { income: 2, build: 2, deal: 3, prestige: 4, luck: 4 },
+    trait: { id: 'soulpact', name: '魂の抵当', text: 'ゲームに1回だけ、破産する代わりに所持金300Gで踏みとどまる（土地はそのまま）' },
+    personality: 'bold',
     rare: true,
   },
 };

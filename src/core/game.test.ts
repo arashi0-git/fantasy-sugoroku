@@ -10,8 +10,10 @@ import {
   Aim,
   applyAction,
   blessingTargets,
+  canBuyout,
   canFly,
   canOfferTrade,
+  cardUsable,
   chainLength,
   buildOptions,
   buyOptions,
@@ -22,6 +24,7 @@ import {
   GameState,
   investedValue,
   ISLAND,
+  isProtected,
   missionProgress,
   raidPrice,
   raidTargets,
@@ -30,6 +33,7 @@ import {
   rentOf,
   rollDice,
   salaryFor,
+  sellValue,
   totalAssets,
   tradeValueOf,
   TRAVEL,
@@ -1545,5 +1549,212 @@ describe('手番の順（ターンごとに先頭がずれる）', () => {
     } finally {
       c.turnOrder = 'fixed';
     }
+  });
+});
+
+describe('新キャラ：黄金変換と大航海', () => {
+  it('黄金変換：銀行への売値が投資額の全額（ふつうは半額）', () => {
+    const s = charGame(['verre']);
+    s.properties[1] = { owner: 0, level: 0 }; // 麦畑の里（100G）
+    expect(sellValue(s, 1)).toBe(100);
+    const plain = charGame([undefined]);
+    plain.properties[1] = { owner: 0, level: 0 };
+    expect(sellValue(plain, 1)).toBe(50);
+  });
+
+  it('大航海：自分の観光地の通行料が+50%', () => {
+    const s = charGame(['rosso']);
+    s.properties[4] = { owner: 0, level: 0 }; // 古代樹の神殿（観光地1つで通行料100G）
+    expect(rentOf(s, 4)).toBe(150);
+    const plain = charGame([undefined]);
+    plain.properties[4] = { owner: 0, level: 0 };
+    expect(rentOf(plain, 4)).toBe(100);
+  });
+
+  it('大航海：観光地の買収価格が2割引（土地は割引なし）', () => {
+    const s = charGame([undefined, 'rosso']);
+    s.properties[4] = { owner: 0, level: 0 }; // 観光地（300G）
+    // 買収価格 = 300 × 2（買収倍率）× 0.94（交渉4の割引）× 0.8（大航海）
+    expect(buyoutPrice(s, 4, 1)).toBe(Math.round(300 * 2 * 0.94 * 0.8));
+    s.properties[1] = { owner: 0, level: 0 }; // 土地（100G）は大航海の割引なし
+    expect(buyoutPrice(s, 1, 1)).toBe(Math.round(100 * 2 * 0.94));
+  });
+});
+
+describe('新キャラ：巻き戻し', () => {
+  it('サイコロを振ると、動く前に振り直しを選ぶ場面になる', () => {
+    let s = charGame(['chrono']);
+    s = applyAction(s, { type: 'roll' });
+    expect(s.phase.kind).toBe('reroll');
+    expect(s.players[0].position).toBe(0); // まだ動いていない
+  });
+
+  it('振り直さないと、いまの目で進む（特性は温存される）', () => {
+    let s = charGame(['chrono']);
+    s = applyAction(s, { type: 'roll' });
+    if (s.phase.kind !== 'reroll') throw new Error('巻き戻しの場面のはず');
+    const sum = s.phase.sum;
+    s = applyAction(s, { type: 'reroll', use: false });
+    expect(s.players[0].position).toBe(sum);
+    expect(s.players[0].rerollUsed).toBe(false);
+  });
+
+  it('振り直すと、その周ではもう振り直しを選べない', () => {
+    let s = charGame(['chrono']);
+    s = applyAction(s, { type: 'roll' });
+    s = applyAction(s, { type: 'reroll', use: true });
+    expect(s.players[0].rerollUsed).toBe(true);
+    expect(s.phase.kind).not.toBe('reroll');
+    expect(s.log.some((e) => /巻き戻しで/.test(e.text))).toBe(true);
+  });
+
+  it('始まりの門を通過すると、また振り直せるようになる', () => {
+    let s = charGame(['chrono']);
+    s.players[0].rerollUsed = true;
+    s.players[0].position = 30;
+    s = rollTo(s, 3); // スタートを通過して運命の石碑へ
+    expect(s.players[0].laps).toBe(1);
+    expect(s.players[0].rerollUsed).toBe(false);
+  });
+
+  it('霧の孤島にいるときは振り直しを選べない', () => {
+    let s = charGame(['chrono']);
+    s.players[0].islandTurns = 2;
+    s = applyAction({ ...s, seed: seedFor(5) }, { type: 'roll' }); // ゾロ目でないので脱出できない
+    expect(s.phase.kind).not.toBe('reroll');
+    expect(s.players[0].rerollUsed).toBe(false);
+  });
+});
+
+describe('新キャラ：魂の抵当', () => {
+  /** モルス（P1）が P0 の黄金の王城（ランドマーク・通行料2000G）に止まる状態 */
+  function morsPays(): GameState {
+    const s = charGame([undefined, 'mors']);
+    s.properties[31] = { owner: 0, level: 4 };
+    s.players[1].money = 100;
+    s.players[1].position = 28;
+    s.current = 1;
+    return s;
+  }
+
+  it('払いきれない通行料でも、1回目は破産せず300Gで踏みとどまる', () => {
+    let s = morsPays();
+    s = rollTo(s, 31);
+    expect(s.players[1].bankrupt).toBe(false);
+    expect(s.players[1].money).toBe(CONFIG.soulMoney);
+    expect(s.players[1].soulUsed).toBe(true);
+    expect(s.log.some((e) => /魂の抵当で/.test(e.text))).toBe(true);
+  });
+
+  it('2回目は破産する', () => {
+    let s = morsPays();
+    s.players[1].soulUsed = true;
+    s = rollTo(s, 31);
+    expect(s.players[1].bankrupt).toBe(true);
+  });
+
+  it('押し出されて他人の土地に止まらされても、土地を売らずに踏みとどまる', () => {
+    let s = charGame(['garou', 'mors']);
+    s.properties[7] = { owner: 0, level: 4 }; // 木漏れ日の砦（140G・ランドマークで通行料700G）
+    s.properties[17] = { owner: 1, level: 0 }; // モルスの土地（売らずに残るはず）
+    s.players[1].money = 50;
+    s.players[1].position = 5;
+    s.players[0].position = 2;
+    s = rollTo(s, 5); // ガロウがモルスと同じマスへ → 剛腕の場面
+    expect(s.phase.kind).toBe('push');
+    s = applyAction(s, { type: 'push', target: 1, dir: 2 }); // モルスを7へ押し出す
+    expect(s.players[1].bankrupt).toBe(false);
+    expect(s.players[1].money).toBe(CONFIG.soulMoney);
+    expect(s.properties[17]?.owner).toBe(1);
+  });
+});
+
+describe('新カード', () => {
+  it('盗賊の手：相手の手札を1枚奪う', () => {
+    const s0 = newGame(1);
+    s0.players[0].hand = ['steal'];
+    s0.players[1].hand = ['treasure'];
+    const s = applyAction(s0, { type: 'useCard', card: 'steal', target: 1 });
+    expect(s.players[1].hand).toEqual([]);
+    expect(s.players[0].hand).toEqual(['treasure']);
+  });
+
+  it('盗賊の手：手札を持っている相手がいなければ使えない', () => {
+    const s0 = newGame(1);
+    s0.players[0].hand = ['steal'];
+    expect(cardUsable(s0, 'steal').ok).toBe(false);
+    expect(() => applyAction(s0, { type: 'useCard', card: 'steal', target: 1 })).toThrow(GameError);
+  });
+
+  it('交換の契約書：建物の段階そのままに持ち主が入れ替わる', () => {
+    const s0 = newGame(1);
+    s0.players[0].hand = ['swap'];
+    s0.properties[9] = { owner: 0, level: 1 }; // 自分の漁火の港・別荘
+    s0.properties[5] = { owner: 1, level: 1 }; // 相手の苔むす泉・別荘
+    const s = applyAction(s0, { type: 'useCard', card: 'swap', square: 5, give: 9 });
+    expect(s.properties[5]).toEqual({ owner: 0, level: 1 });
+    expect(s.properties[9]).toEqual({ owner: 1, level: 1 });
+    expect(s.players[0].hand).toEqual([]);
+  });
+
+  it('交換の契約書：相手の土地の段階が出す土地より高い組み合わせは使えない', () => {
+    const s0 = newGame(1);
+    s0.players[0].hand = ['swap'];
+    s0.properties[9] = { owner: 0, level: 0 };
+    s0.properties[5] = { owner: 1, level: 2 };
+    expect(cardUsable(s0, 'swap').ok).toBe(false);
+    expect(() => applyAction(s0, { type: 'useCard', card: 'swap', square: 5, give: 9 })).toThrow(GameError);
+  });
+
+  it('聖域の紋章：守られた土地は買収も略奪の令状もできない', () => {
+    let s = newGame(1);
+    s.players[0].hand = ['sanctuary'];
+    s.properties[9] = { owner: 0, level: 1 };
+    s = applyAction(s, { type: 'useCard', card: 'sanctuary', square: 9 });
+    expect(isProtected(s, 9)).toBe(true);
+    expect(canBuyout(s, 9)).toBe(false);
+    s.current = 1; // 相手の番として、令状の対象に出てこないことを確かめる
+    s.players[1].money = 5000;
+    expect(raidTargets(s)).not.toContain(9);
+  });
+
+  it('聖域の紋章：守りのターンが過ぎると買収できるようになる', () => {
+    let s = newGame(1);
+    s.players[0].hand = ['sanctuary'];
+    s.properties[9] = { owner: 0, level: 1 };
+    s = applyAction(s, { type: 'useCard', card: 'sanctuary', square: 9 });
+    s.turn += CONFIG.sanctuaryTurns;
+    expect(isProtected(s, 9)).toBe(false);
+    expect(canBuyout(s, 9)).toBe(true);
+  });
+
+  it('呪いの刻印：持ち主が1周するあいだ通行料が0になり、1周すると戻る', () => {
+    let s = newGame(1);
+    s.players[0].hand = ['curse'];
+    s.properties[31] = { owner: 1, level: 3 };
+    expect(rentOf(s, 31)).toBeGreaterThan(0);
+    s = applyAction(s, { type: 'useCard', card: 'curse', square: 31 });
+    expect(rentOf(s, 31)).toBe(0);
+    s.players[1].laps += 1;
+    expect(rentOf(s, 31)).toBeGreaterThan(0);
+  });
+
+  it('移築の書：建物を別の自分の土地へ、段階そのまま移す', () => {
+    const s0 = newGame(1);
+    s0.players[0].hand = ['relocate'];
+    s0.properties[9] = { owner: 0, level: 2 };
+    s0.properties[13] = { owner: 0, level: 0 };
+    const s = applyAction(s0, { type: 'useCard', card: 'relocate', square: 13, give: 9 });
+    expect(s.properties[13].level).toBe(2);
+    expect(s.properties[9].level).toBe(0);
+    expect(s.players[0].hand).toEqual([]);
+  });
+
+  it('移築の書：建物のある土地へは移せない', () => {
+    const s0 = newGame(1);
+    s0.players[0].hand = ['relocate'];
+    s0.properties[9] = { owner: 0, level: 2 };
+    s0.properties[13] = { owner: 0, level: 1 };
+    expect(() => applyAction(s0, { type: 'useCard', card: 'relocate', square: 13, give: 9 })).toThrow(GameError);
   });
 });

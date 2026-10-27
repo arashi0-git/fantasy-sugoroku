@@ -38,12 +38,20 @@ export interface Player {
   record: { buyouts: number; rentIn: number };
   /** 1周に1回の特性（旋風・操り糸）をこの周に使ったか。始まりの門を通過すると戻る */
   traitUsed: boolean;
+  /** 巻き戻し（時の魔導士）をこの周に使ったか。始まりの門を通過すると戻る */
+  rerollUsed: boolean;
+  /** 魂の抵当（死霊術師）をもう使ったか。ゲームに1回だけ */
+  soulUsed: boolean;
 }
 
 /** 土地・観光地の所有情報。level は建物の段階（観光地は常に0） */
 export interface Property {
   owner: number;
   level: number;
+  /** 聖域の紋章：このターン数まで買収・略奪の令状の対象にならない */
+  protectedUntil?: number;
+  /** 呪いの刻印：持ち主の周回数がこの値のあいだ通行料が0（持ち主が1周すると消える） */
+  curseLap?: number;
 }
 
 /** 土地の取引の提示内容。from が to の土地 want を指名し、対価として give の土地と money を出す */
@@ -66,6 +74,8 @@ export type GuardCard = 'angel' | 'barrier' | 'mirror';
 
 export type Phase =
   | { kind: 'roll' }
+  /** 巻き戻し（時の魔導士）：振った出目を採用するか、振り直すか選ぶ（1周に1回） */
+  | { kind: 'reroll'; dice: [number, number]; sum: number; aim?: Aim }
   /** 追い風の羽：振った出目を±1するか選ぶ（振った人が羽を持っているときだけ） */
   | { kind: 'adjust'; dice: [number, number]; sum: number }
   /** 操り糸（人形使い）：手番の人が振った出目 sum を、responder が±1するか選ぶ */
@@ -156,8 +166,11 @@ export type Action =
   | { type: 'buy'; level: number }
   | { type: 'build'; level: number }
   | { type: 'buyout' }
-  /** 攻めのカードを使う。square = 地震・祭りの対象、target = 封印の鎖の相手、sum = 運命の賽の出目 */
-  | { type: 'useCard'; card: CardId; square?: number; target?: number; sum?: number }
+  /** 攻めのカードを使う。square = 地震・祭りの対象、target = 封印の鎖の相手、sum = 運命の賽の出目。
+   * 交換の契約書・移築の書では give = 自分の土地（交換に出す土地／建物の移し元）、square = 相手の土地／移し先 */
+  | { type: 'useCard'; card: CardId; square?: number; target?: number; sum?: number; give?: number }
+  /** 巻き戻し：サイコロを振り直すか（use = true なら振り直し、false ならいまの目を採用） */
+  | { type: 'reroll'; use: boolean }
   /** 追い風の羽：出目に delta（-1 か +1）を足す。0 なら使わない */
   | { type: 'adjust'; delta: -1 | 0 | 1 }
   /** 守りのカードを使うか */
@@ -278,6 +291,8 @@ export function createGame(players: PlayerSetup[], seed = Date.now()): GameState
       missionDone: false,
       record: { buyouts: 0, rentIn: 0 },
       traitUsed: false,
+      rerollUsed: false,
+      soulUsed: false,
     })),
     current: 0,
     turn: 1,
@@ -410,9 +425,15 @@ export function rentOf(state: GameState, square: number): number {
   const prop = state.properties[square];
   if (!prop) return 0;
   const owner = state.players[prop.owner];
+  // 呪いの刻印：持ち主が1周するあいだ通行料は0
+  if (prop.curseLap !== undefined && owner.laps <= prop.curseLap) return 0;
   const prestige = 1 + statMod(owner, 'prestige');
   const spurt = isLastSpurt(state) ? CONFIG.lastSpurtRate : 1;
-  if (isTourist(square)) return Math.round(CONFIG.touristRent[touristCount(state, prop.owner)] * prestige * spurt);
+  if (isTourist(square)) {
+    // 大航海：自分の観光地の通行料アップ
+    const voyage = hasTrait(owner, 'voyage') ? CONFIG.voyageTouristRentRate : 1;
+    return Math.round(CONFIG.touristRent[touristCount(state, prop.owner)] * prestige * spurt * voyage);
+  }
   let rent = rentAt(square, prop.level) * prestige;
   if (state.festivals.includes(square)) {
     rent *= hasTrait(owner, 'festival') ? CONFIG.mishaFestivalMultiplier : CONFIG.festivalMultiplier;
@@ -440,10 +461,12 @@ export function chainLength(state: GameState, square: number): number {
   return n;
 }
 
-/** 買収価格。buyer の交渉で安くなる（元の持ち主が受け取るのもこの額） */
+/** 買収価格。buyer の交渉で安くなる（元の持ち主が受け取るのもこの額）。大航海は観光地がさらに安い */
 export function buyoutPrice(state: GameState, square: number, buyer = state.current): number {
   const discount = 1 - statMod(state.players[buyer], 'deal');
-  return Math.round(investedValue(state, square) * CONFIG.buyoutRate * discount);
+  let price = investedValue(state, square) * CONFIG.buyoutRate * discount;
+  if (isTourist(square) && hasTrait(state.players[buyer], 'voyage')) price *= CONFIG.voyageTouristBuyoutRate;
+  return Math.round(price);
 }
 
 /** 建設費の支払い額（建築で安くなる。土地代は変わらない） */
@@ -453,12 +476,27 @@ export function buildPayment(p: Player, listCost: number): number {
 
 export function canBuyout(state: GameState, square: number): boolean {
   const prop = state.properties[square];
-  // 土地はランドマークが建つまで、観光地はいつでも買収できる
-  return !!prop && isProperty(square) && prop.level < LEVEL.LANDMARK;
+  // 土地はランドマークが建つまで、観光地はいつでも買収できる。聖域の紋章で守られている土地は対象外
+  return !!prop && isProperty(square) && prop.level < LEVEL.LANDMARK && !isProtected(state, square);
+}
+
+/** 聖域の紋章で守られているか（このターンまで買収・略奪の令状の対象にならない） */
+export function isProtected(state: GameState, square: number): boolean {
+  const prop = state.properties[square];
+  return !!prop && prop.protectedUntil !== undefined && state.turn <= prop.protectedUntil;
+}
+
+/** 呪いの刻印が効いているか（持ち主が1周するまで通行料0） */
+export function isCursed(state: GameState, square: number): boolean {
+  const prop = state.properties[square];
+  return !!prop && prop.curseLap !== undefined && state.players[prop.owner].laps <= prop.curseLap;
 }
 
 export function sellValue(state: GameState, square: number): number {
-  return Math.floor(investedValue(state, square) * CONFIG.sellRate);
+  const prop = state.properties[square];
+  // 黄金変換：持ち主が錬金術師なら、銀行への売値が高い
+  const rate = prop && hasTrait(state.players[prop.owner], 'alchemy') ? CONFIG.alchemySellRate : CONFIG.sellRate;
+  return Math.floor(investedValue(state, square) * rate);
 }
 
 export function ownedSquares(state: GameState, playerId: number): number[] {
@@ -585,6 +623,52 @@ export function sealTargets(state: GameState): number[] {
   return state.players.filter((p) => !p.bankrupt && p.id !== state.current && !islandImmune(p)).map((p) => p.id);
 }
 
+/** 盗賊の手で狙える相手（手札を持っている相手） */
+export function stealTargets(state: GameState): number[] {
+  return state.players.filter((p) => !p.bankrupt && p.id !== state.current && p.hand.length > 0).map((p) => p.id);
+}
+
+/** 聖域の紋章で守れる自分の土地（すでに守られている土地は除く） */
+export function sanctuaryTargets(state: GameState): number[] {
+  return ownedSquares(state, state.current).filter((sq) => isProperty(sq) && !isProtected(state, sq));
+}
+
+/** 呪いの刻印を付けられる相手の土地（すでに効いている土地は除く） */
+export function curseTargets(state: GameState): number[] {
+  return Object.entries(state.properties)
+    .filter(([sq, p]) => p.owner !== state.current && isProperty(Number(sq)) && !isCursed(state, Number(sq)))
+    .map(([sq]) => Number(sq))
+    .sort((a, b) => a - b);
+}
+
+/** 交換の契約書：対価に出せる自分の土地 */
+export function swapGiveTargets(state: GameState): number[] {
+  return ownedSquares(state, state.current).filter((sq) => isProperty(sq));
+}
+
+/** 交換の契約書：give と入れ替えられる相手の土地（建物の段階が give 以下） */
+export function swapWantTargets(state: GameState, give: number): number[] {
+  const lv = state.properties[give]?.level;
+  if (lv === undefined) return [];
+  return Object.entries(state.properties)
+    .filter(([sq, p]) => p.owner !== state.current && isProperty(Number(sq)) && p.level <= lv)
+    .map(([sq]) => Number(sq))
+    .sort((a, b) => a - b);
+}
+
+/** 移築の書：建物が建っている自分の土地（移し元） */
+export function relocateSources(state: GameState): number[] {
+  return ownedSquares(state, state.current).filter((sq) => isLand(sq) && state.properties[sq].level >= 1);
+}
+
+/** 移築の書：移し先（更地の自分の土地で、移し元の段階を受け入れられるもの） */
+export function relocateDests(state: GameState, source: number): number[] {
+  const p = state.players[state.current];
+  const lv = state.properties[source]?.level ?? 0;
+  if (lv === 0 || lv > maxLevel(p, 0)) return [];
+  return ownedSquares(state, state.current).filter((sq) => sq !== source && isLand(sq) && state.properties[sq].level === 0);
+}
+
 /** 略奪の令状の支払い額 */
 export function raidPrice(state: GameState, square: number, buyer = state.current): number {
   return Math.round(buyoutPrice(state, square, buyer) * CONFIG.raidRate);
@@ -640,6 +724,20 @@ export function cardUsable(state: GameState, card: CardId): { ok: true } | { ok:
       return raidTargets(state).length ? { ok: true } : { ok: false, why: '奪える土地がないか、お金が足りません' };
     case 'seal':
       return sealTargets(state).length ? { ok: true } : { ok: false, why: '送れる相手がいません' };
+    case 'steal':
+      return stealTargets(state).length ? { ok: true } : { ok: false, why: '手札を持っている相手がいません' };
+    case 'swap':
+      return swapGiveTargets(state).some((give) => swapWantTargets(state, give).length)
+        ? { ok: true }
+        : { ok: false, why: '入れ替えられる土地の組み合わせがありません' };
+    case 'sanctuary':
+      return sanctuaryTargets(state).length ? { ok: true } : { ok: false, why: '守れる自分の土地がありません' };
+    case 'curse':
+      return curseTargets(state).length ? { ok: true } : { ok: false, why: '刻印を付けられる相手の土地がありません' };
+    case 'relocate':
+      return relocateSources(state).some((src) => relocateDests(state, src).length)
+        ? { ok: true }
+        : { ok: false, why: '移せる建物と移し先の組み合わせがありません' };
     default:
       return { ok: true };
   }
@@ -669,6 +767,9 @@ export function applyAction(prev: GameState, action: Action): GameState {
     case 'roll':
       expectPhase(s, 'roll');
       roll(s, action.aim);
+      break;
+    case 'reroll':
+      reroll(s, action.use);
       break;
     case 'payEscape':
       payEscape(s);
@@ -815,6 +916,7 @@ function receiveSalary(s: GameState) {
   p.laps += 1;
   // 1周に1回の特性が戻る（旋風は gustEvery 周ごと）
   if (!hasTrait(p, 'gust') || p.laps % CONFIG.gustEvery === 0) p.traitUsed = false;
+  p.rerollUsed = false; // 巻き戻しも1周に1回
   if (p.skyUsed && ++p.skyLaps >= CONFIG.skyrideLaps) p.skyUsed = false;
   if (hasTrait(p, 'pioneer') && p.laps % CONFIG.pioneerLaps === 0) pioneer(s);
   // 祭囃子：まだ祭りのない、いちばん通行料の高い自分の土地で祭りが始まる
@@ -873,7 +975,6 @@ function roll(s: GameState, aim?: Aim) {
   const p = me(s);
   const [d1, d2, seed] = rollDice(s.seed, aim, aimHitRateOf(p));
   s.seed = seed;
-  const aimText = aim ? `（狙い：${AIM_ZONES[aim].name}）` : '';
   s.rolled = [d1, d2];
   s.lastPayment = null;
   s.lastCard = null;
@@ -898,7 +999,19 @@ function roll(s: GameState, aim?: Aim) {
     return;
   }
 
-  if (double) {
+  // 巻き戻し：動く前に、振り直すか聞く（1周に1回。霧の孤島にいるときは使えない）
+  if (hasTrait(p, 'rewind') && !p.rerollUsed) {
+    s.phase = { kind: 'reroll', dice: [d1, d2], sum: d1 + d2, aim };
+    return;
+  }
+  settleRoll(s, d1, d2, aim);
+}
+
+/** 振った目を確定させて進む（ゾロ目の数え直し・操り糸・追い風の羽はここから） */
+function settleRoll(s: GameState, d1: number, d2: number, aim?: Aim) {
+  const p = me(s);
+  const aimText = aim ? `（狙い：${AIM_ZONES[aim].name}）` : '';
+  if (d1 === d2) {
     s.doublesInRow += 1;
     if (s.doublesInRow >= CONFIG.doublesToIsland) {
       sendToIsland(s, `サイコロ ${d1}・${d2}。ゾロ目が${CONFIG.doublesToIsland}回続いた`);
@@ -916,6 +1029,24 @@ function roll(s: GameState, aim?: Aim) {
     return;
   }
   tailwindOrMove(s, [d1, d2], d1 + d2);
+}
+
+/** 巻き戻し：振り直す（振り直した目を採用する）か、いまの目で進むか */
+function reroll(s: GameState, use: boolean) {
+  if (s.phase.kind !== 'reroll') throw new GameError('今は振り直せません');
+  const { dice, aim } = s.phase;
+  const p = me(s);
+  if (!use) {
+    settleRoll(s, dice[0], dice[1], aim);
+    return;
+  }
+  p.rerollUsed = true;
+  const [d1, d2, seed] = rollDice(s.seed, aim, aimHitRateOf(p));
+  s.seed = seed;
+  s.rolled = [d1, d2];
+  log(s, p.id, `巻き戻しでサイコロを振り直した（${dice[0] + dice[1]} → ${d1 + d2}）`);
+  s.lastCard = { player: p.id, title: '巻き戻し', text: `出目${dice[0] + dice[1]}→${d1 + d2}` };
+  settleRoll(s, d1, d2, aim);
 }
 
 /** 追い風の羽を持っていれば、動く前に出目を±1するか選ばせる。なければそのまま進む */
@@ -1184,7 +1315,9 @@ function pushedLands(s: GameState, id: number) {
 /** 手番でない人に払わせる。足りなければ安い土地から自動で売り、それでも足りなければ破産 */
 function forcePay(s: GameState, id: number, amount: number, creditor: number, square: number) {
   const t = s.players[id];
-  while (t.money < amount) {
+  // 魂の抵当が残っている人は、土地を売らずに破産の瀬戸際まで行く（そこで抵当が発動して土地は守られる）
+  const soulLeft = hasTrait(t, 'soulpact') && !t.soulUsed;
+  while (!soulLeft && t.money < amount) {
     const mine = ownedSquares(s, id);
     if (!mine.length) break;
     const cheapest = mine.reduce((a, b) => (sellValue(s, b) < sellValue(s, a) ? b : a));
@@ -1435,6 +1568,77 @@ function useCard(s: GameState, a: Extract<Action, { type: 'useCard' }>) {
       moveBy(s, sum);
       return;
     }
+
+    case 'steal': {
+      if (a.target === undefined || !stealTargets(s).includes(a.target)) throw new GameError('狙う相手を選んでください');
+      useFromHand(s, a.card);
+      s.cardsUsed += 1;
+      const t = s.players[a.target];
+      const idx = Math.floor(rand(s) * t.hand.length);
+      const stolen = t.hand.splice(idx, 1)[0];
+      p.hand.push(stolen);
+      log(s, p.id, `${name}で ${t.name} の手札を1枚奪った`, `${name}で ${t.name} から「${CARDS[stolen].name}」を奪った`);
+      s.lastCard = { player: p.id, card: a.card, text: `${t.name}の手札を1枚奪った` };
+      return;
+    }
+
+    case 'swap': {
+      if (a.give === undefined || !swapGiveTargets(s).includes(a.give)) throw new GameError('交換に出す自分の土地を選んでください');
+      if (a.square === undefined || !swapWantTargets(s, a.give).includes(a.square)) {
+        throw new GameError('交換で欲しい土地は、出す土地と同じ段階以下の相手の土地から選んでください');
+      }
+      useFromHand(s, a.card);
+      s.cardsUsed += 1;
+      const other = s.players[s.properties[a.square].owner];
+      log(
+        s,
+        p.id,
+        `${name}で ${other.name} の ${BOARD[a.square].name} と、自分の ${BOARD[a.give].name} を入れ替えた`,
+      );
+      s.lastCard = { player: p.id, card: a.card, text: `${other.name}の${BOARD[a.square].name}と${BOARD[a.give].name}を交換` };
+      // 建物の段階はそのままに持ち主を入れ替える（祭り・聖域・呪いは移転で消える）
+      const giveOwner = s.properties[a.give].owner;
+      transferProperty(s, a.square, giveOwner);
+      transferProperty(s, a.give, other.id);
+      // どちらかが独占の条件を満たしたら、そこでゲームが終わる
+      if (checkMonopolyFor(s, p.id, a.square)) return;
+      checkMonopolyFor(s, other.id, a.give);
+      return;
+    }
+
+    case 'sanctuary': {
+      if (a.square === undefined || !sanctuaryTargets(s).includes(a.square)) throw new GameError('守る土地を選んでください');
+      useFromHand(s, a.card);
+      s.cardsUsed += 1;
+      s.properties[a.square].protectedUntil = s.turn + CONFIG.sanctuaryTurns - 1;
+      log(s, p.id, `${name}で ${BOARD[a.square].name} を守った（${CONFIG.sanctuaryTurns}ターン買収されない）`);
+      s.lastCard = { player: p.id, card: a.card, text: `${BOARD[a.square].name}を聖域で守った` };
+      return;
+    }
+
+    case 'curse': {
+      if (a.square === undefined || !curseTargets(s).includes(a.square)) throw new GameError('刻印を付ける土地を選んでください');
+      useFromHand(s, a.card);
+      s.cardsUsed += 1;
+      const owner = s.players[s.properties[a.square].owner];
+      s.properties[a.square].curseLap = owner.laps;
+      log(s, p.id, `${name}を ${owner.name} の ${BOARD[a.square].name} に付けた（${owner.name} が1周するまで通行料0）`);
+      s.lastCard = { player: p.id, card: a.card, text: `${owner.name}の${BOARD[a.square].name}に呪い` };
+      return;
+    }
+
+    case 'relocate': {
+      if (a.give === undefined || !relocateSources(s).includes(a.give)) throw new GameError('建物を移す元の土地を選んでください');
+      if (a.square === undefined || !relocateDests(s, a.give).includes(a.square)) throw new GameError('移し先は更地の自分の土地から選んでください');
+      useFromHand(s, a.card);
+      s.cardsUsed += 1;
+      const level = s.properties[a.give].level;
+      s.properties[a.square].level = level;
+      s.properties[a.give].level = 0;
+      log(s, p.id, `${name}で ${BOARD[a.give].name} の${LEVEL_NAMES[level]}を ${BOARD[a.square].name} へ移した`);
+      s.lastCard = { player: p.id, card: a.card, text: `${BOARD[a.give].name}の建物を${BOARD[a.square].name}へ移築` };
+      return;
+    }
   }
 }
 
@@ -1464,6 +1668,25 @@ function validateTarget(s: GameState, a: Extract<Action, { type: 'useCard' }>) {
       if (!Number.isInteger(sum) || sum < 2 || sum > 12) bad('出目は2〜12から選んでください');
       break;
     }
+    case 'steal':
+      if (a.target === undefined || !stealTargets(s).includes(a.target)) bad('狙う相手を選んでください');
+      break;
+    case 'swap':
+      if (a.give === undefined || !swapGiveTargets(s).includes(a.give)) bad('交換に出す自分の土地を選んでください');
+      if (a.square === undefined || !swapWantTargets(s, a.give ?? -1).includes(a.square)) {
+        bad('交換で欲しい土地は、出す土地と同じ段階以下の相手の土地から選んでください');
+      }
+      break;
+    case 'sanctuary':
+      if (a.square === undefined || !sanctuaryTargets(s).includes(a.square)) bad('守る土地を選んでください');
+      break;
+    case 'curse':
+      if (a.square === undefined || !curseTargets(s).includes(a.square)) bad('刻印を付ける土地を選んでください');
+      break;
+    case 'relocate':
+      if (a.give === undefined || !relocateSources(s).includes(a.give)) bad('建物を移す元の土地を選んでください');
+      if (a.square === undefined || !relocateDests(s, a.give ?? -1).includes(a.square)) bad('移し先は更地の自分の土地から選んでください');
+      break;
   }
 }
 
@@ -1658,6 +1881,8 @@ function doBuyout(s: GameState, sq: number, raid = false) {
   p.money -= paid;
   prevOwner.money += price;
   prop.owner = p.id;
+  delete prop.protectedUntil;
+  delete prop.curseLap;
   p.record.buyouts += 1;
   // 持ち主が変わったら祭りは終わる
   if (s.festivals.includes(sq)) {
@@ -1751,9 +1976,11 @@ function offerTrade(s: GameState, a: Extract<Action, { type: 'offerTrade' }>) {
   s.phase = { kind: 'trade', offer: { from: from.id, to: to.id, want: a.want, give: [...a.give], money: a.money } };
 }
 
-/** 土地の持ち主を変える。開かれていた祭りは終わる（買収と同じ） */
+/** 土地の持ち主を変える。開かれていた祭りは終わり、聖域の紋章と呪いの刻印も消える（買収と同じ） */
 function transferProperty(s: GameState, square: number, to: number) {
   s.properties[square].owner = to;
+  delete s.properties[square].protectedUntil;
+  delete s.properties[square].curseLap;
   if (s.festivals.includes(square)) {
     s.festivals = s.festivals.filter((x) => x !== square);
     log(s, null, `${BOARD[square].name} の祭りは持ち主が変わって終わった`);
@@ -1937,6 +2164,14 @@ function sell(s: GameState, square: number) {
 
 function goBankrupt(s: GameState, creditor: number | null, playerId = s.current) {
   const p = s.players[playerId];
+  // 魂の抵当：ゲームに1回だけ、破産する代わりに所持金だけで踏みとどまる（土地はそのまま、債権者には渡らない）
+  if (hasTrait(p, 'soulpact') && !p.soulUsed) {
+    p.soulUsed = true;
+    p.money = CONFIG.soulMoney;
+    log(s, p.id, `魂の抵当で破産を免れた（所持金 ${CONFIG.soulMoney}G で踏みとどまる）`);
+    s.lastCard = { player: p.id, title: '魂の抵当', text: '破産を免れた' };
+    return;
+  }
   if (creditor !== null && p.money > 0) {
     s.players[creditor].money += p.money;
     log(s, p.id, `残りの ${p.money}G を ${s.players[creditor].name} に渡した`);

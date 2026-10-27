@@ -144,9 +144,54 @@ export function cpuLine(s: GameState, pers: Personality, a: Action): string | nu
         }
         case 'treasure':
           return say(pers, { bold: '宝箱、開けちゃうぞ！', careful: '宝箱を開けてみますね', schemer: '宝箱を開ける。中身次第だ' });
+        case 'steal': {
+          const t = who(a.target!);
+          return say(pers, {
+            bold: `${t}、手札を1枚もらっていくぜ！`,
+            careful: `${t}さん、カードを1枚いただきますね`,
+            schemer: `${t}の手札、1枚拝借する`,
+          });
+        }
+        case 'swap': {
+          const o = s.properties[a.square!].owner;
+          return say(pers, {
+            bold: `契約書だ！ ${who(o)}の${name(a.square!)}と交換だ！`,
+            careful: `交換の契約書で、${name(a.square!)}をいただきます`,
+            schemer: `契約書を使わせてもらう。${name(a.square!)}は私がもらう`,
+          });
+        }
+        case 'sanctuary':
+          return say(pers, {
+            bold: `${name(a.square!)}は聖域だ。手出しはさせない！`,
+            careful: `${name(a.square!)}は紋章で守っておきます`,
+            schemer: `${name(a.square!)}には聖域の紋章を。奪えはしない`,
+          });
+        case 'curse': {
+          const o = s.properties[a.square!].owner;
+          return say(pers, {
+            bold: `${who(o)}の${name(a.square!)}、しばらく稼げないようにしてやる！`,
+            careful: `${name(a.square!)}には刻印を。しばらく通行料は入りません`,
+            schemer: `${name(a.square!)}に呪いの刻印。稼ぎ頭は封じておく`,
+          });
+        }
+        case 'relocate':
+          return say(pers, {
+            bold: `${name(a.give!)}の建物を${name(a.square!)}へ移築だ！`,
+            careful: `建物を${name(a.square!)}へ移しておきます`,
+            schemer: `移築の書。建物の置き場所を整える`,
+          });
         default:
           return null;
       }
+    }
+
+    case 'reroll': {
+      if (!a.use) return null;
+      return say(pers, {
+        bold: 'その目はなしだ！ 時間を巻き戻す！',
+        careful: 'その出目は都合が悪いので、巻き戻します',
+        schemer: '巻き戻しだ。その未来は選ばない',
+      });
     }
 
     case 'adjust': {
