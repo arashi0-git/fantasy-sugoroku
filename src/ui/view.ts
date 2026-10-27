@@ -99,6 +99,17 @@ const KIND_LABEL: Record<SquareKind, string> = {
 
 const fmt = (n: number) => `${n.toLocaleString('ja-JP')}G`;
 
+/** 建物の立体アイコン（レベル別）。持ち主色は --owner、ランドマークの金は --brass を使う */
+const BUILDING_SVGS: Record<number, string> = {
+  1: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12.5 12 4l9 8.5" fill="none" stroke="var(--owner)" stroke-width="2.6" stroke-linecap="round"/><rect x="6.4" y="12" width="11.2" height="8.6" rx="0.8" fill="#f5edd9" stroke="rgba(90,70,30,.45)"/><rect x="10.4" y="15.6" width="3.2" height="5" fill="var(--owner)"/></svg>`,
+  2: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="4.6" width="10" height="16" rx="0.8" fill="#e9e2d0" stroke="rgba(90,70,30,.45)"/><rect x="5.6" y="3" width="12.8" height="2.2" rx="1" fill="var(--owner)"/><g fill="var(--owner)" opacity=".75"><rect x="9.2" y="7.6" width="2" height="2.4"/><rect x="12.8" y="7.6" width="2" height="2.4"/><rect x="9.2" y="11.4" width="2" height="2.4"/><rect x="12.8" y="11.4" width="2" height="2.4"/><rect x="9.2" y="15.2" width="2" height="2.4"/><rect x="12.8" y="15.2" width="2" height="2.4"/></g></svg>`,
+  3: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.6" y="8" width="16.8" height="12.6" rx="0.8" fill="#f5edd9" stroke="rgba(90,70,30,.45)"/><rect x="9.8" y="3.4" width="4.4" height="4.6" fill="#e9e2d0" stroke="rgba(90,70,30,.45)"/><path d="M8.6 3.4 12 1l3.4 2.4Z" fill="var(--owner)"/><rect x="3.6" y="8" width="16.8" height="2.4" fill="var(--owner)"/><g fill="var(--owner)" opacity=".7"><rect x="5.8" y="12.6" width="2" height="2.4"/><rect x="9.4" y="12.6" width="2" height="2.4"/><rect x="12.6" y="12.6" width="2" height="2.4"/><rect x="16.2" y="12.6" width="2" height="2.4"/></g><rect x="10.6" y="16.4" width="2.8" height="4.2" fill="var(--owner)"/></svg>`,
+  4: `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="#efe3c2" stroke="rgba(120,90,20,.55)"><rect x="3.4" y="9" width="4" height="11.6"/><rect x="16.6" y="9" width="4" height="11.6"/><rect x="9" y="6.4" width="6" height="14.2"/></g><g fill="var(--brass)"><rect x="3.4" y="7" width="1.8" height="2"/><rect x="5.9" y="7" width="1.5" height="2"/><rect x="16.6" y="7" width="1.8" height="2"/><rect x="18.7" y="7" width="1.9" height="2"/><rect x="9" y="4.4" width="1.9" height="2"/><rect x="12" y="4.4" width="1.9" height="2"/></g><path d="M12 0.8v3" stroke="#a87f2e" stroke-width="1.2"/><path d="M12 0.8l3 1-3 1Z" fill="#c0392b"/><rect x="10.7" y="15.6" width="2.6" height="5" rx="1.3" fill="#7a5c14"/></svg>`,
+};
+
+/** プレイヤーのコマ（チェスのポーン型）。色は --c を使う */
+const PAWN_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="21.7" rx="6.2" ry="1.6" fill="rgba(0,0,0,.28)"/><path d="M12 2.6a3.4 3.4 0 1 1 0 6.8 3.4 3.4 0 0 1 0-6.8Z" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><path d="M8.6 10.2h6.8l.7 2.3H7.9Z" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><path d="M9.2 12.5c.5 2.9-.4 4.7-2 6.3h9.6c-1.6-1.6-2.5-3.4-2-6.3Z" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><rect x="5.6" y="18.4" width="12.8" height="2.7" rx="1.3" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><ellipse cx="10.4" cy="5" rx="1.5" ry="1" fill="rgba(255,255,255,.4)"/></svg>`;
+
 /** マス番号 → 9×9 グリッド上の位置と、盤の内側を向く辺 */
 function placement(i: number): { row: number; col: number; side: 'bottom' | 'left' | 'top' | 'right' } {
   if (i <= 8) return { row: 9, col: 9 - i, side: 'bottom' };
@@ -283,11 +294,12 @@ export class View {
       }
 
       const lv = tile.querySelector('.lv')!;
-      lv.replaceChildren(
-        ...(prop && prop.level > 0
-          ? Array.from({ length: prop.level }, () => el('span', prop.level === LEVEL.LANDMARK ? 'mark' : ''))
-          : []),
-      );
+      lv.replaceChildren();
+      if (prop && prop.level > 0) {
+        const b = el('span', 'building');
+        b.innerHTML = BUILDING_SVGS[prop.level] ?? '';
+        lv.append(b);
+      }
 
       tile.classList.toggle('owned', !!prop);
       if (prop) tile.style.setProperty('--owner', s.players[prop.owner].color);
@@ -312,6 +324,7 @@ export class View {
           .map((p) => {
             const t = el('span', 'token' + (p.id === s.current ? ' active' : ''));
             t.style.setProperty('--c', p.color);
+            t.innerHTML = PAWN_SVG;
             t.title = p.name;
             return t;
           }),
@@ -1011,8 +1024,21 @@ export class View {
     return n;
   }
 
+  private shakenFor = '';
+
   private paymentNotice(s: GameState): HTMLElement {
     const pay = s.lastPayment!;
+    if (pay.amount >= 1000) {
+      // 高額の支払いは盤面を揺らして見せ場にする（同じ支払いで二重に揺らさない）
+      const sig = `${pay.payer}:${pay.payee}:${pay.amount}:${pay.square}:${s.log.length}`;
+      if (this.shakenFor !== sig) {
+        this.shakenFor = sig;
+        this.boardEl.classList.remove('shake');
+        void this.boardEl.offsetWidth;
+        this.boardEl.classList.add('shake');
+        window.setTimeout(() => this.boardEl.classList.remove('shake'), 550);
+      }
+    }
     const n = el('p', 'notice pay' + (pay.amount >= 1000 ? ' big' : ''));
     n.append(
       `${s.players[pay.payer].name} が ${s.players[pay.payee].name} に `,
@@ -1159,6 +1185,21 @@ export class View {
       panel.append(el('h4', '', '秘密の使命'));
       panel.append(ms);
     }
+    // 勝利の紙吹雪（色は勝者の色＋金などを混ぜる。位置やタイミングは決定的にばらす）
+    const confetti = el('div', 'confetti');
+    confetti.setAttribute('aria-hidden', 'true');
+    const palette = ['#d8b25e', '#c0392b', '#3d7dd8', '#3a9a6a', '#f3ead3', winner.color];
+    for (let i = 0; i < 42; i++) {
+      const piece = el('i', '');
+      piece.style.left = `${(i * 37 + 11) % 100}%`;
+      piece.style.background = palette[i % palette.length];
+      piece.style.setProperty('--d', `${((i * 29) % 20) / 10}s`);
+      piece.style.setProperty('--t', `${2.6 + ((i * 13) % 14) / 10}s`);
+      piece.style.setProperty('--sway', `${((i * 53) % 53) - 26}px`);
+      if (i % 3 === 0) piece.style.borderRadius = '50%';
+      confetti.append(piece);
+    }
+    panel.append(confetti);
     const again = el('button', 'btn', 'もう一度遊ぶ');
     again.addEventListener('click', () => this.h.restart());
     panel.append(again);
@@ -1252,9 +1293,7 @@ export class View {
     host.hidden = false;
     const wrap = el('div', 'title-wrap');
     wrap.append(el('p', 'title-kicker', 'すごろく型・資産ゲーム'));
-    const logo = el('h1', 'title-logo');
-    logo.append(el('span', 'logo-line', 'ファンタジー'), el('span', 'logo-line logo-line-2', 'すごろく'));
-    wrap.append(logo);
+    wrap.append(el('h1', 'title-logo', 'ファンタジーすごろく'));
     wrap.append(el('p', 'title-tagline', '土地を買って、建てて、独占を狙え。'));
     const icons = el('p', 'title-icons');
     icons.append(el('span', '', '🎲'), el('span', '', '🏰'), el('span', '', '🪙'));
@@ -1299,19 +1338,13 @@ export class View {
     const makeGrid = () => el('ul', 'select-grid');
     const grid = makeGrid();
     const rareGrid = makeGrid();
-    let shown = 0;
     for (const c of CHARACTER_LIST) {
       const li = el('li');
       const card = el('button', 'char-card' + (c.rare ? ' rare' : ''));
       card.style.setProperty('--c', c.color);
-      card.style.animationDelay = `${shown++ * 45}ms`;
       const head = el('div', 'char-head');
-      const emblem = el('span', 'char-emblem', c.name.slice(0, 1));
-      emblem.setAttribute('aria-hidden', 'true');
-      const nameBox = el('div', 'char-namebox');
-      nameBox.append(el('span', 'char-title', c.title), el('span', 'char-name', c.name));
-      head.append(emblem, nameBox);
-      if (c.rare) head.append(el('span', 'rare-badge', '★レア'));
+      head.append(el('span', 'char-title', c.title), el('span', 'char-name', c.name));
+      if (c.rare) head.append(el('span', 'rare-badge', 'レア'));
       const trait = el('div', 'char-trait');
       trait.append(el('span', 'trait-name', c.trait.name), el('span', 'trait-text', c.trait.text));
       card.append(head, this.statRow(c.id, true), trait);
