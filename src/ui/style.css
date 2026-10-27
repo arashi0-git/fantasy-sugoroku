@@ -184,6 +184,45 @@ button:focus-visible {
   display: block;
 }
 
+.tile .sanct-badge {
+  display: none;
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(8px, 14cqi, 12px);
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: #c9a227;
+  color: #fff;
+}
+.tile.sanctuary-on .sanct-badge {
+  display: block;
+}
+.tile.sanctuary-on {
+  box-shadow: inset 0 0 0 2px rgba(201, 162, 39, 0.75);
+}
+
+.tile .curse-badge {
+  display: none;
+  position: absolute;
+  bottom: 3px;
+  left: 3px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(8px, 14cqi, 12px);
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: #4c1d95;
+  color: #fff;
+}
+.tile.curse-on .curse-badge {
+  display: block;
+}
+
 .tile.highlight {
   background: #fff8e4;
 }

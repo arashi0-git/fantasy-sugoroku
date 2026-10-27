@@ -27,6 +27,8 @@ import {
   choiceTargets,
   completedGroups,
   GameState,
+  isCursed,
+  isProtected,
   isTourist,
   landPrice,
   LevelOption,
@@ -38,10 +40,17 @@ import {
   raidPrice,
   raidTargets,
   rankByAssets,
+  relocateDests,
+  relocateSources,
   rentAt,
   rentOf,
   salaryFor,
+  sanctuaryTargets,
+  curseTargets,
   sellValue,
+  stealTargets,
+  swapGiveTargets,
+  swapWantTargets,
   totalAssets,
   tradeValueOf,
   touristCount,
@@ -52,6 +61,7 @@ import {
 
 export interface ViewHandlers {
   roll(aim?: Aim): void;
+  reroll(use: boolean): void;
   escape(): void;
   buy(level: number): void;
   build(level: number): void;
@@ -198,7 +208,11 @@ export class View {
       if (sq.group) tile.style.setProperty('--band', GROUPS[sq.group].color);
       const fest = el('span', 'fest-badge', '祭');
       fest.title = '祭り開催中（通行料2倍）';
-      tile.append(el('div', 'band'), el('div', 'name', sq.name), el('div', 'sub'), el('div', 'lv'), fest, el('div', 'tokens'));
+      const sanct = el('span', 'sanct-badge', '聖');
+      sanct.title = '聖域の紋章で守られている（買収・略奪の令状の対象にならない）';
+      const curse = el('span', 'curse-badge', '呪');
+      curse.title = '呪いの刻印（持ち主が1周するまで通行料0）';
+      tile.append(el('div', 'band'), el('div', 'name', sq.name), el('div', 'sub'), el('div', 'lv'), fest, sanct, curse, el('div', 'tokens'));
       tile.addEventListener('click', () => {
         if (tile.classList.contains('selectable')) this.onTileClick?.(sq.index);
       });
@@ -222,6 +236,8 @@ export class View {
 
   /** 使おうとしている攻めのカード（対象を選んでいる途中）。場面が変わったら取り消す */
   private pendingCard: CardId | null = null;
+  /** 交換の契約書・移築の書で、先に選んだ自分の土地（交換に出す土地／建物の移し元） */
+  private pendingSource: number | null = null;
   /** 天翔の行き先を選んでいる途中 */
   private pendingFly = false;
   /** 取引の提示を作っている途中（相手・欲しい土地・対価の土地と金額）。場面が変わったら取り消す */
@@ -236,6 +252,7 @@ export class View {
     const key = `${s.turn}:${s.current}:${s.phase.kind}:${s.cardsUsed}:${s.tradeUsed}`;
     if (key !== this.pendingKey || !myTurn) {
       this.pendingCard = null;
+      this.pendingSource = null;
       this.pendingFly = false;
       this.tradeDraft = null;
     }
@@ -254,11 +271,13 @@ export class View {
       return;
     }
     this.pendingCard = card;
+    this.pendingSource = null;
     if (this.last) this.render(...this.last);
   }
 
   private cancelCard = () => {
     this.pendingCard = null;
+    this.pendingSource = null;
     this.pendingFly = false;
     this.tradeDraft = null;
     if (this.last) this.render(...this.last);
@@ -278,6 +297,28 @@ export class View {
       const targets =
         card === 'earthquake' ? earthquakeTargets(s) : card === 'festival' ? festivalTargets(s) : card === 'raid' ? raidTargets(s) : blessingTargets(s);
       return { targets: new Set(targets), onPick: (square) => this.h.useCard({ type: 'useCard', card, square }) };
+    }
+    if (this.pendingCard === 'sanctuary' || this.pendingCard === 'curse') {
+      const card = this.pendingCard;
+      const targets = card === 'sanctuary' ? sanctuaryTargets(s) : curseTargets(s);
+      return { targets: new Set(targets), onPick: (square) => this.h.useCard({ type: 'useCard', card, square }) };
+    }
+    if (this.pendingCard === 'swap' || this.pendingCard === 'relocate') {
+      const card = this.pendingCard;
+      // まず自分の土地（交換に出す土地／建物の移し元）を選び、次に相手の土地／移し先を選ぶ
+      if (this.pendingSource === null) {
+        const firsts = card === 'swap' ? swapGiveTargets(s) : relocateSources(s);
+        return {
+          targets: new Set(firsts),
+          onPick: (sq) => {
+            this.pendingSource = sq;
+            if (this.last) this.render(...this.last);
+          },
+        };
+      }
+      const give = this.pendingSource;
+      const seconds = card === 'swap' ? swapWantTargets(s, give) : relocateDests(s, give);
+      return { targets: new Set(seconds), onPick: (square) => this.h.useCard({ type: 'useCard', card, square, give }) };
     }
     const targets = choiceTargets(s);
     if (targets.length) return { targets: new Set(targets), onPick: (sq) => this.h.choose(sq) };
@@ -312,9 +353,14 @@ export class View {
       tile.classList.toggle('owned', !!prop);
       if (prop) tile.style.setProperty('--owner', s.players[prop.owner].color);
       tile.classList.toggle('festival-on', s.festivals.includes(i));
+      tile.classList.toggle('sanctuary-on', !!prop && isProtected(s, i));
+      tile.classList.toggle('curse-on', !!prop && isCursed(s, i));
       const pickable = !!sel?.targets.has(i);
       tile.classList.toggle('selectable', pickable);
-      tile.classList.toggle('danger', pickable && (ph.kind === 'liquidate' || this.pendingCard === 'earthquake' || this.pendingCard === 'raid'));
+      tile.classList.toggle(
+        'danger',
+        pickable && (ph.kind === 'liquidate' || this.pendingCard === 'earthquake' || this.pendingCard === 'raid' || this.pendingCard === 'curse'),
+      );
       if (pickable) {
         tile.tabIndex = 0;
         tile.setAttribute('role', 'button');
@@ -344,7 +390,8 @@ export class View {
     const prop = s.properties[sq.index];
     if (sq.kind === 'tourist') {
       const owner = prop ? `持ち主：${s.players[prop.owner].name}・通行料 ${fmt(rentOf(s, sq.index))}` : '空き地';
-      return `${sq.name}（観光地）\n価格 ${fmt(CONFIG.touristPrice)} / ${owner}\n通行料は持っている観光地の数で上がる`;
+      const fx = `${isProtected(s, sq.index) ? '\n聖域の紋章で守られている（買収されない）' : ''}${isCursed(s, sq.index) ? '\n呪いの刻印（持ち主が1周するまで通行料0）' : ''}`;
+      return `${sq.name}（観光地）\n価格 ${fmt(CONFIG.touristPrice)} / ${owner}\n通行料は持っている観光地の数で上がる${fx}`;
     }
     if (sq.kind === 'start') {
       return `${sq.name}（スタート）\n通過すると給料：基本${fmt(CONFIG.salary)}＋土地1つ${fmt(CONFIG.landIncomePerLand)}＋建物1段階${fmt(CONFIG.landIncomePerLevel)}（総資産が最下位なら2倍）\nぴったり止まると祝福：自分の土地を無料で1段階上げられる`;
@@ -355,10 +402,11 @@ export class View {
       ? `持ち主：${s.players[prop.owner].name}・${LEVEL_NAMES[prop.level]}・通行料 ${fmt(rentOf(s, sq.index))}`
       : '空き地';
     const fest = s.festivals.includes(sq.index) ? '\n祭り開催中（通行料アップ）' : '';
+    const fx = `${isProtected(s, sq.index) ? '\n聖域の紋章で守られている（買収されない）' : ''}${isCursed(s, sq.index) ? '\n呪いの刻印（持ち主が1周するまで通行料0）' : ''}`;
     const chain = prop ? chainLength(s, sq.index) : 0;
     const bonus = CONFIG.chainBonus[Math.min(chain, CONFIG.chainBonus.length - 1)] ?? 0;
     const chainText = bonus > 0 ? `\n${chain}マス連続で通行料+${Math.round(bonus * 100)}%` : '';
-    return `${sq.name}（${g.name}）\n価格 ${fmt(g.price)} / ${owner}${fest}${chainText}`;
+    return `${sq.name}（${g.name}）\n価格 ${fmt(g.price)} / ${owner}${fest}${fx}${chainText}`;
   }
 
   private renderCenter(s: GameState, x: ViewExtras, myTurn: boolean) {
@@ -673,6 +721,115 @@ export class View {
         list.append(li);
       }
       panel.append(list);
+    } else if (card === 'steal') {
+      panel.append(el('p', '', '手札を1枚奪う相手を選んでください（何が奪えるかは運次第です）。'));
+      const list = el('ul', 'choice-list');
+      for (const id of stealTargets(s)) {
+        const p = s.players[id];
+        const li = el('li');
+        const b = el('button');
+        b.append(el('span', '', p.name), el('span', 'cost', `手札 ${p.hand.length}枚・総資産 ${fmt(totalAssets(s, id))}`));
+        b.addEventListener('click', () => this.h.useCard({ type: 'useCard', card, target: id }));
+        li.append(b);
+        list.append(li);
+      }
+      panel.append(list);
+    } else if (card === 'sanctuary') {
+      panel.append(el('p', '', `${CONFIG.sanctuaryTurns}ターンのあいだ買収・略奪の令状から守る、自分の土地を選んでください。`));
+      panel.append(
+        this.squareList(
+          sanctuaryTargets(s),
+          (sq) => `${isTourist(sq) ? '観光地' : LEVEL_NAMES[s.properties[sq].level]}・通行料 ${fmt(rentOf(s, sq))}`,
+          false,
+          (square) => this.h.useCard({ type: 'useCard', card, square }),
+        ),
+      );
+    } else if (card === 'curse') {
+      panel.append(el('p', '', '通行料を0にする相手の土地を、盤面か一覧から選んでください（持ち主が1周するまで続きます）。'));
+      panel.append(
+        this.squareList(
+          curseTargets(s),
+          (sq) => {
+            const prop = s.properties[sq];
+            return `${s.players[prop.owner].name}・${isTourist(sq) ? '観光地' : LEVEL_NAMES[prop.level]}・通行料 ${fmt(rentOf(s, sq))}`;
+          },
+          false,
+          (square) => this.h.useCard({ type: 'useCard', card, square }),
+        ),
+      );
+    } else if (card === 'swap') {
+      if (this.pendingSource === null) {
+        panel.append(el('p', '', 'まず、交換に出す自分の土地を盤面か一覧から選んでください。'));
+        panel.append(
+          this.squareList(
+            swapGiveTargets(s),
+            (sq) => `${isTourist(sq) ? '観光地' : LEVEL_NAMES[s.properties[sq].level]}・通行料 ${fmt(rentOf(s, sq))}`,
+            false,
+            (sq) => {
+              this.pendingSource = sq;
+              if (this.last) this.render(...this.last);
+            },
+          ),
+        );
+      } else {
+        const give = this.pendingSource;
+        panel.append(
+          el('p', '', `${BOARD[give].name}（${isTourist(give) ? '観光地' : LEVEL_NAMES[s.properties[give].level]}）と入れ替える相手の土地を選んでください（同じ段階以下の土地だけ）。`),
+        );
+        panel.append(
+          this.squareList(
+            swapWantTargets(s, give),
+            (sq) => {
+              const prop = s.properties[sq];
+              return `${s.players[prop.owner].name}・${isTourist(sq) ? '観光地' : LEVEL_NAMES[prop.level]}・通行料 ${fmt(rentOf(s, sq))}`;
+            },
+            false,
+            (square) => this.h.useCard({ type: 'useCard', card, square, give }),
+          ),
+        );
+        const back = el('div', 'actions');
+        const bb = el('button', 'btn quiet', '出す土地を選び直す');
+        bb.addEventListener('click', () => {
+          this.pendingSource = null;
+          if (this.last) this.render(...this.last);
+        });
+        back.append(bb);
+        panel.append(back);
+      }
+    } else if (card === 'relocate') {
+      if (this.pendingSource === null) {
+        panel.append(el('p', '', 'まず、建物を移す元の自分の土地を盤面か一覧から選んでください。'));
+        panel.append(
+          this.squareList(
+            relocateSources(s),
+            (sq) => `${LEVEL_NAMES[s.properties[sq].level]}・通行料 ${fmt(rentOf(s, sq))}`,
+            false,
+            (sq) => {
+              this.pendingSource = sq;
+              if (this.last) this.render(...this.last);
+            },
+          ),
+        );
+      } else {
+        const src = this.pendingSource;
+        panel.append(el('p', '', `${BOARD[src].name} の${LEVEL_NAMES[s.properties[src].level]}の移し先（更地の自分の土地）を選んでください。`));
+        panel.append(
+          this.squareList(
+            relocateDests(s, src),
+            (sq) => `${GROUPS[BOARD[sq].group!].name}・価格 ${fmt(landPrice(sq))}`,
+            false,
+            (square) => this.h.useCard({ type: 'useCard', card, square, give: src }),
+          ),
+        );
+        const back = el('div', 'actions');
+        const bb = el('button', 'btn quiet', '移す元を選び直す');
+        bb.addEventListener('click', () => {
+          this.pendingSource = null;
+          if (this.last) this.render(...this.last);
+        });
+        back.append(bb);
+        panel.append(back);
+      }
     } else if (card === 'destiny') {
       const pos = s.players[s.current].position;
       panel.append(el('p', '', `${fmt(CONFIG.destinyCost)}払って、進む数を選びます（ゾロ目扱いにはなりません）。`));
@@ -801,6 +958,22 @@ export class View {
       wrap.append(el('p', 'hint', `止めたゾーンの出目が出やすくなります（${Math.round(aimHitRateOf(me) * 100)}%）`));
       if (myTurn) queueMicrotask(() => b.focus());
       return wrap;
+    }
+
+    if (phase.kind === 'reroll') {
+      const panel = el('div', 'panel');
+      if (me.id !== this.human) {
+        panel.append(el('h3', '', `${me.name} が時を見ています`));
+        panel.append(el('p', '', '巻き戻しを使うか考えています。'));
+        return panel;
+      }
+      const dest = BOARD[(me.position + phase.sum) % BOARD.length];
+      panel.append(el('h3', '', `出目は ${phase.sum}（${phase.dice[0]}・${phase.dice[1]}）。巻き戻す？`));
+      panel.append(
+        el('p', '', `いまの目では ${dest.name} に止まります。時の魔導士の特性で、1周に1回だけサイコロを振り直せます（振り直した目を採用します）。`),
+      );
+      panel.append(this.twoButtons('振り直す', 'このまま進む', off, () => this.h.reroll(true), () => this.h.reroll(false), 'second'));
+      return panel;
     }
 
     if (phase.kind === 'buy') {
@@ -1094,7 +1267,8 @@ export class View {
       const p = el('p');
       p.append('支払い ', fmt(phase.debt), '・あと ');
       p.append(el('span', 'need', fmt(short)));
-      p.append(' 足りない。売る土地を選んでください（売値は投資額の半分）。');
+      const sellRateText = me.character && CHARACTERS[me.character].trait.id === 'alchemy' ? '75%（黄金変換）' : '半分';
+      p.append(` 足りない。売る土地を選んでください（売値は投資額の${sellRateText}）。`);
       panel.append(p);
       panel.append(
         this.squareList(

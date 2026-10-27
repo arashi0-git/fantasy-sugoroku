@@ -335,3 +335,52 @@ describe('略奪の令状の判断', () => {
     expect(decideCpu(s, PERSONALITIES.schemer, always(0))).toEqual({ type: 'useCard', card: 'raid', square: 5 });
   });
 });
+
+describe('新カードと巻き戻しの判断', () => {
+  it('巻き戻し：他人の高額な土地に止まる目なら振り直す', () => {
+    const s = newGame(1);
+    s.properties[10] = { owner: 1, level: 4 }; // 人魚の入江（180G・ランドマークで通行料900G）
+    s.players[0].position = 1;
+    s.phase = { kind: 'reroll', dice: [4, 5], sum: 9 }; // 9進むと10に止まる
+    expect(decideCpu(s, PERSONALITIES.schemer, always(0))).toEqual({ type: 'reroll', use: true });
+  });
+
+  it('巻き戻し：自分の土地に止まる目なら振り直さない', () => {
+    const s = newGame(1);
+    s.properties[10] = { owner: 0, level: 0 };
+    s.players[0].position = 1;
+    s.phase = { kind: 'reroll', dice: [4, 5], sum: 9 };
+    expect(decideCpu(s, PERSONALITIES.schemer, always(0))).toEqual({ type: 'reroll', use: false });
+  });
+
+  it('交換の契約書：自分の色が揃う交換をする（同じ色の土地は対価に出さない）', () => {
+    const s = newGame(1);
+    s.players[0].hand = ['swap'];
+    s.properties[1] = { owner: 0, level: 0 }; // 自分の草原
+    s.properties[2] = { owner: 1, level: 0 }; // 相手の草原（これで草原が揃う）
+    s.properties[13] = { owner: 0, level: 0 }; // 自分の砂漠（対価に出せる）
+    expect(decideCpu(s, PERSONALITIES.schemer, always(0))).toEqual({ type: 'useCard', card: 'swap', square: 2, give: 13 });
+  });
+
+  it('盗賊の手：手札を溜めている相手を狙う', () => {
+    const s = newGame(1);
+    s.players[0].hand = ['steal'];
+    s.players[1].hand = ['treasure', 'growth', 'festival'];
+    expect(decideCpu(s, PERSONALITIES.bold, always(0))).toEqual({ type: 'useCard', card: 'steal', target: 1 });
+  });
+
+  it('呪いの刻印：通行料の高い土地に付ける', () => {
+    const s = newGame(1);
+    s.players[0].hand = ['curse'];
+    s.properties[31] = { owner: 1, level: 4 }; // 通行料2000G
+    expect(decideCpu(s, PERSONALITIES.bold, always(0))).toEqual({ type: 'useCard', card: 'curse', square: 31 });
+  });
+
+  it('聖域の紋章：揃えた色グループの土地を守る', () => {
+    const s = newGame(1);
+    s.players[0].hand = ['sanctuary'];
+    s.properties[1] = { owner: 0, level: 1 }; // 草原を2つ持っている
+    s.properties[2] = { owner: 0, level: 0 };
+    expect(decideCpu(s, PERSONALITIES.careful, always(0))).toEqual({ type: 'useCard', card: 'sanctuary', square: 1 });
+  });
+});

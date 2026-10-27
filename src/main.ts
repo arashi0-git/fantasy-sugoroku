@@ -75,6 +75,7 @@ const view = new View(
   document.getElementById('hand')!,
   {
     roll: (aim) => humanAct({ type: 'roll', aim }),
+    reroll: (use) => humanAct({ type: 'reroll', use }),
     escape: () => humanAct({ type: 'payEscape' }),
     buy: (level) => humanAct({ type: 'buy', level }),
     build: (level) => humanAct({ type: 'build', level }),

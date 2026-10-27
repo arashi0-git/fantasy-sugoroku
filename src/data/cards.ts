@@ -10,6 +10,11 @@ export type CardId =
   | 'treasure'
   | 'growth'
   | 'raid'
+  | 'steal'
+  | 'swap'
+  | 'sanctuary'
+  | 'curse'
+  | 'relocate'
   | 'angel'
   | 'barrier'
   | 'mirror'
@@ -45,6 +50,36 @@ export const CARDS: Record<CardId, Card> = {
     name: '略奪の令状',
     kind: 'attack',
     text: '相手の土地か観光地を1つ選び、止まらずに買収する（買収価格の1.5倍。上乗せ分は銀行へ。ランドマークは対象外）',
+    weight: 2,
+  },
+  steal: { id: 'steal', name: '盗賊の手', kind: 'attack', text: '相手1人の手札を1枚、ランダムに奪う（何を奪ったかは本人にだけ見える）', weight: 3 },
+  swap: {
+    id: 'swap',
+    name: '交換の契約書',
+    kind: 'attack',
+    text: '自分の土地1つと、建物の段階がそれ以下の相手の土地1つを入れ替える（建物はそのまま移る）',
+    weight: 1.5,
+  },
+  // 守るためのカードだが、使うのは自分の番（攻めのカードと同じ流れ）なので kind は attack
+  sanctuary: {
+    id: 'sanctuary',
+    name: '聖域の紋章',
+    kind: 'attack',
+    text: '自分の土地1つを3ターン、買収と略奪の令状から守る',
+    weight: 3,
+  },
+  curse: {
+    id: 'curse',
+    name: '呪いの刻印',
+    kind: 'attack',
+    text: '相手の土地1つの通行料を、持ち主が1周するあいだ0にする',
+    weight: 2,
+  },
+  relocate: {
+    id: 'relocate',
+    name: '移築の書',
+    kind: 'attack',
+    text: '自分の建物を、別の自分の更地の土地へ移す（建物の段階はそのまま。移し先の上限を超える段階は移せない）',
     weight: 2,
   },
   angel: { id: 'angel', name: '天使の加護', kind: 'guard', text: '通行料を1回払わずに済む', weight: 3 },

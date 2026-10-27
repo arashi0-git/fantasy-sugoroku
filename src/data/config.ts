@@ -95,6 +95,16 @@ export const CONFIG = {
   gambleLose: 1.25,
   /** 写し身：他人の攻めのカードを写し取る確率 */
   mimicRate: 0.25,
+  /** 黄金変換：この特性の持ち主が土地を銀行に売るときの売値 = 投資額 × この値（ふつうは sellRate） */
+  alchemySellRate: 1,
+  /** 大航海：この特性の持ち主の観光地の通行料の倍率 */
+  voyageTouristRentRate: 1.5,
+  /** 大航海：この特性の持ち主が観光地を買収するときの価格の倍率（0.8 = 2割引。略奪の令状もこの価格をもとに計算する） */
+  voyageTouristBuyoutRate: 0.8,
+  /** 魂の抵当：破産の代わりに踏みとどまるときの所持金（G） */
+  soulMoney: 300,
+  /** 聖域の紋章：その土地が買収・略奪の令状の対象にならないターン数（使ったターンを含む） */
+  sanctuaryTurns: 3,
 
   /** 手札カード */
   startHand: 2,
