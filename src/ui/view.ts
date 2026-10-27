@@ -288,7 +288,65 @@ export class View {
       this.boardEl.append(tile);
     }
     this.buildSheet();
+    this.buildTiltToggle();
+    this.buildRotateHint();
     requestAnimationFrame(this.tickGauge);
+  }
+
+  /** 盤面を斜め見下ろしにする「3D風」表示の切り替えボタン（速度バーの隣に作る） */
+  private buildTiltToggle() {
+    const speedbar = document.getElementById('speedbar');
+    if (!speedbar?.parentElement) return;
+    const bar = el('div', 'speed-bar tilt-bar');
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', '盤面の見え方');
+    const btn = el('button', 'tilt-btn', '3D風');
+    btn.type = 'button';
+    const sync = () => {
+      const on = document.body.classList.contains('tilt-on');
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', String(on));
+    };
+    try {
+      if (window.localStorage.getItem('fs-tilt') === '1') document.body.classList.add('tilt-on');
+    } catch {
+      /* 保存できない環境では初期値オフのまま */
+    }
+    btn.addEventListener('click', () => {
+      const on = document.body.classList.toggle('tilt-on');
+      try {
+        window.localStorage.setItem('fs-tilt', on ? '1' : '0');
+      } catch {
+        /* 保存できなくても切り替え自体は有効 */
+      }
+      sync();
+    });
+    bar.append(el('span', 'speed-label', '見え方'), btn);
+    speedbar.after(bar);
+    sync();
+  }
+
+  /** 縦向きのスマホで対戦画面を開いている間だけ出す「横画面が見やすいよ」の小さな案内 */
+  private buildRotateHint() {
+    try {
+      if (window.sessionStorage.getItem('fs-rotate-hint') === 'off') document.body.classList.add('hint-off');
+    } catch {
+      /* 判定できない環境ではそのまま出す */
+    }
+    const hint = el('div', 'rotate-hint');
+    const close = el('button', 'rotate-hint-close', '✕');
+    close.type = 'button';
+    close.setAttribute('aria-label', '案内を閉じる');
+    close.addEventListener('click', () => {
+      document.body.classList.add('hint-off');
+      try {
+        window.sessionStorage.setItem('fs-rotate-hint', 'off');
+      } catch {
+        /* 保存できなくても、この画面では閉じられる */
+      }
+    });
+    hint.append(el('span', 'rotate-hint-text', '📱 横画面が見やすいよ'), close);
+    document.body.append(hint);
   }
 
   /** マスをタップしたとき：対象選択中ならそちらを優先し、それ以外は詳細シートを開く */
