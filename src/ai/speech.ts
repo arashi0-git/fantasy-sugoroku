@@ -325,6 +325,32 @@ export function cpuLine(s: GameState, pers: Personality, a: Action): string | nu
         schemer: `${name(a.square)}は手放す。やむを得ない`,
       });
 
+    case 'offerTrade': {
+      const t = who(a.to);
+      return say(pers, {
+        bold: `${t}、${name(a.want)}を譲ってくれ！ 話が早いだろ？`,
+        careful: `${t}さん、${name(a.want)}の取引をお願いできませんか`,
+        schemer: `${t}、${name(a.want)}が欲しい。取引しよう`,
+      });
+    }
+
+    case 'answerTrade': {
+      if (s.phase.kind !== 'trade') return null;
+      const t = who(s.phase.offer.from);
+      if (a.accept) {
+        return say(pers, {
+          bold: `いいだろう、${t}の取引に乗った！`,
+          careful: `その条件なら、${t}さんと取引します`,
+          schemer: `悪くない条件だ。${t}と取引する`,
+        });
+      }
+      return say(pers, {
+        bold: `${t}、その条件じゃ話にならないね`,
+        careful: `ごめんなさい、${t}さん。その条件では受けられません`,
+        schemer: `${t}、条件が合わない。断らせてもらう`,
+      });
+    }
+
     default:
       return null;
   }

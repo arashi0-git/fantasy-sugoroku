@@ -91,6 +91,8 @@ const view = new View(
     puppet: (delta) => humanAct({ type: 'puppet', delta }),
     push: (target, dir) => humanAct({ type: 'push', target, dir }),
     gamble: (use) => humanAct({ type: 'gamble', use }),
+    tradeOffer: (offer) => humanAct({ type: 'offerTrade', ...offer }),
+    tradeAnswer: (accept) => humanAct({ type: 'answerTrade', accept }),
     restart: () => start(),
   },
 );

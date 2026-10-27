@@ -8,8 +8,10 @@ import {
   Action,
   actorOf,
   canFly,
+  canOfferTrade,
   cardUsable,
   flyTargets,
+  investedValue,
   islandImmune,
   PUSH_DIRS,
   PushDir,
@@ -34,11 +36,13 @@ import {
   landPrice,
   LevelOption,
   ownedSquares,
+  ownsAllTourist,
   rankByAssets,
   rentAt,
   rentOf,
   sealTargets,
   sellValue,
+  tradeValueOf,
   touristCount,
   TOURIST_SQUARES,
   TRAVEL,
@@ -64,9 +68,14 @@ export function decideCpu(s: GameState, pers: Personality, rand: Rand): Action {
       if (card) return card;
       const flight = chooseFly(s, pers);
       if (flight !== null) return { type: 'fly', square: flight };
+      const trade = chooseTrade(s, pers, rand);
+      if (trade) return trade;
       if (p.islandTurns > 0 && wantsEscape(s, pers)) return { type: 'payEscape' };
       return { type: 'roll', aim: chooseAim(s, pers, rand) };
     }
+
+    case 'trade':
+      return { type: 'answerTrade', accept: acceptsTrade(s, pers, rand) };
 
     case 'adjust':
       return { type: 'adjust', delta: chooseAdjust(s, pers, ph.sum) };
@@ -421,6 +430,155 @@ function decideBuyout(s: GameState, pers: Personality, sq: number): Action {
   // 慎重派は手元のお金を十分残せるときだけ。策士は建物のある土地を
   if (pers.id === 'careful') return prop.level >= LEVEL.VILLA && left >= 1000 ? yes : no;
   return prop.level >= LEVEL.VILLA && left >= reserveOf(s, pers) ? yes : no;
+}
+
+// ---------- 土地の取引 ----------
+
+/**
+ * 取引の提示を受けるか（応答する人の性格で判断する）。
+ * 渡す土地の自分にとっての価値と、もらう土地・お金の価値を比べる。
+ * 提示者がその土地で独占を完成させるなら、対価は割り増しでないと渡さない。
+ */
+export function acceptsTrade(s: GameState, pers: Personality, rand: Rand): boolean {
+  if (s.phase.kind !== 'trade') return false;
+  const o = s.phase.offer;
+  const me = o.to;
+  // この取引で相手がその場で勝利するなら、どんな条件でも受けない
+  const hypoProps = { ...s.properties, [o.want]: { owner: o.from, level: s.properties[o.want].level } };
+  for (const sq of o.give) hypoProps[sq] = { owner: o.to, level: s.properties[sq].level };
+  const hypo = { ...s, properties: hypoProps };
+  if (completedGroups(hypo, o.from).length >= TRIPLE_GROUPS) return false;
+  const completesTourist = isTourist(o.want) && ownsAllTourist(hypo, o.from);
+  const lose = tradeValueOf(s, o.want, me);
+  const gainLands = o.give.reduce((sum, sq) => sum + tradeValueOf(s, sq, me), 0);
+  const gainBase = o.give.reduce((sum, sq) => sum + investedValue(s, sq), 0);
+  const gain = gainLands + o.money;
+  // もらう土地が自分の色グループや観光地を進めるものか
+  const advances = gainLands > gainBase;
+  // 相手がこの土地で独占を完成させるなら、その戦略的な上乗せ分も対価に求める。
+  // さらに、渡す独占に見合う得（もらう土地の戦略的な上乗せ分）がなければ、簡単には渡さない
+  const wantBase = investedValue(s, o.want);
+  const completesTheirs = tradeValueOf(s, o.want, o.from) >= wantBase * CONFIG.tradeCompleteRate;
+  const premium = Math.max(0, tradeValueOf(s, o.want, o.from) - wantBase) * CONFIG.tradePremiumRate;
+  const mutual = gainLands - gainBase >= premium;
+  // 受け取る土地で自分のセット（色グループ・観光地）も完成するなら、本当の意味で対等な交換
+  const setForSet =
+    completedGroups(hypo, me).length > completedGroups(s, me).length || (ownsAllTourist(hypo, me) && !ownsAllTourist(s, me));
+  let need = lose + premium;
+  if (completedGroups(s, o.from).length >= 1) need *= CONFIG.tradeRichRate; // 独占を持つ人には割高で売る
+  if (completesTheirs && !mutual) need *= CONFIG.tradeBlockRate;
+  if (completesTourist && !setForSet) need *= CONFIG.tradeBlockRate; // 観光地の独占を完成させる土地は、セット同士の交換でないと手放さない
+  switch (pers.id) {
+    case 'bold':
+      need *= advances ? 0.98 : 1; // 積極派：自分の色が揃うなら、少し損でも受ける
+      break;
+    case 'careful':
+      need *= 1.05; // 慎重派：割に合わない取引は断る
+      break;
+    case 'schemer':
+      need *= advances ? 0.95 : 1.05; // 策士：自分の独占に近づく取引は受けやすく、そうでない取引も値段次第
+      break;
+  }
+  const jitter = (rand() - 0.5) * 0.1 * Math.max(1, lose);
+  return gain + jitter >= need;
+}
+
+/** 取引の対価に出さない土地（完成した・揃えかけの色グループ、集めている観光地） */
+function isKeptForPlan(s: GameState, sq: number, playerId: number): boolean {
+  const g = BOARD[sq].group;
+  if (g && isLand(sq)) return GROUP_SQUARES[g].filter((x) => s.properties[x]?.owner === playerId).length >= 2;
+  if (isTourist(sq)) return touristCount(s, playerId) >= 2;
+  return false;
+}
+
+/**
+ * 自分の色グループの完成や観光地の独占まであと1つの土地を、
+ * 自分に不要な土地とお金で取りにいく。仕掛けなければ null。
+ */
+function chooseTrade(s: GameState, pers: Personality, rand: Rand): Action | null {
+  if (!canOfferTrade(s)) return null;
+  const p = s.players[s.current];
+  if (p.islandTurns > 0) return null; // 霧の孤島では取引しない
+
+  // 欲しい土地（あと1つで揃うもの）。自分にとって価値の高い順に試す
+  const wants: { to: number; want: number }[] = [];
+  for (const g of Object.keys(GROUP_SQUARES) as GroupId[]) {
+    const squares = GROUP_SQUARES[g];
+    const missing = squares.filter((sq) => s.properties[sq]?.owner !== p.id);
+    if (missing.length === 1 && s.properties[missing[0]] && squares.some((sq) => s.properties[sq]?.owner === p.id)) {
+      wants.push({ to: s.properties[missing[0]].owner, want: missing[0] });
+    }
+  }
+  if (touristCount(s, p.id) === TOURIST_SQUARES.length - 1) {
+    const sq = TOURIST_SQUARES.find((x) => s.properties[x] && s.properties[x].owner !== p.id);
+    if (sq !== undefined) wants.push({ to: s.properties[sq].owner, want: sq });
+  }
+  if (!wants.length) return null;
+  wants.sort((a, b) => tradeValueOf(s, b.want, p.id) - tradeValueOf(s, a.want, p.id));
+
+  // 仕掛けるかどうかは性格で決める（策士は積極的、慎重派は控えめ）。
+  // すでに独占を持つ人は警戒されるので、取引を持ちかける機会が減る
+  const gate = { bold: 0.15, careful: 0.15, schemer: 0.45 }[pers.id] * (completedGroups(s, p.id).length >= 1 ? 0.3 : 1);
+  if (rand() >= gate) return null;
+
+  for (const { to, want } of wants) {
+    if (s.players[to].bankrupt) continue;
+    // その土地で自分がその場で勝利するなら、相手は絶対に手放さないので狙わない
+    const hypo = { ...s, properties: { ...s.properties, [want]: { owner: p.id, level: s.properties[want].level } } };
+    if (completedGroups(hypo, p.id).length >= TRIPLE_GROUPS) continue;
+    const completesTourist = isTourist(want) && touristCount(s, p.id) === TOURIST_SQUARES.length - 1;
+    // 相手が受け入れそうな額：相手にとっての価値＋完成させる上乗せ分に、少し色を付ける
+    let need = Math.round(
+      (tradeValueOf(s, want, to) + Math.max(0, tradeValueOf(s, want, p.id) - investedValue(s, want)) * CONFIG.tradePremiumRate) *
+        CONFIG.tradeOfferRate,
+    );
+    if (completedGroups(s, p.id).length >= 1) need = Math.round(need * CONFIG.tradeRichRate); // 独占を持つ人には割高になる
+    // 対価の土地：自分の計画に要らない土地から安い順（欲しい土地と同じ色グループのものは出さない）。
+    // 相手の独占を完成させる土地は、対価には出さない
+    const wantGroup = BOARD[want].group;
+    const spare = ownedSquares(s, p.id)
+      .filter((sq) => BOARD[sq].group !== wantGroup && !isKeptForPlan(s, sq, p.id))
+      .filter((sq) => tradeValueOf(s, sq, to) < investedValue(s, sq) * CONFIG.tradeCompleteRate)
+      .sort((a, b) => investedValue(s, a) - investedValue(s, b));
+    const give: number[] = [];
+    let covered = 0;
+    let coveredBase = 0;
+    const addUntil = (target: number) => {
+      for (const sq of spare) {
+        if (covered >= target) break;
+        if (give.includes(sq)) continue;
+        give.push(sq);
+        covered += tradeValueOf(s, sq, to);
+        coveredBase += investedValue(s, sq);
+      }
+    };
+    addUntil(need);
+    // 対価の土地の上乗せ分が、欲しい土地の上乗せ分に見合わない取引では、相手は大きな割増を求める。
+    // その分も見込んで対価を足す（観光地の独占を完成させる土地は、セット同士の交換でないと割増がもう一段かかる）
+    const wantSurplus = Math.max(0, tradeValueOf(s, want, p.id) - investedValue(s, want));
+    const giveHypo = {
+      ...s,
+      properties: { ...s.properties, ...Object.fromEntries(give.map((sq) => [sq, { owner: to, level: s.properties[sq].level }])) },
+    };
+    const setForSet =
+      completedGroups(giveHypo, to).length > completedGroups(s, to).length || (ownsAllTourist(giveHypo, to) && !ownsAllTourist(s, to));
+    let raised = need;
+    if (covered - coveredBase < wantSurplus) raised = Math.round(raised * CONFIG.tradeBlockRate);
+    if (completesTourist && !setForSet) raised = Math.round(raised * CONFIG.tradeBlockRate);
+    if (raised > need) {
+      need = raised;
+      addUntil(need);
+    }
+    // 不足分はお金で。手元に残すお金は割らない（取引では性格によらず最低限の備えを残す）
+    let money = Math.max(0, Math.ceil((need - covered) / 50) * 50);
+    const reserve = Math.max(reserveOf(s, pers), CONFIG.tradeReserve);
+    if (p.money - money < reserve) money = Math.max(0, p.money - reserve);
+    // 対価が目安に届かない提示は出さない（積極派は少し足りなくても出してみる）
+    if (covered + money < need * (pers.id === 'bold' ? 0.8 : 1)) continue;
+    if (!give.length && money <= 0) continue;
+    return { type: 'offerTrade', to, want, give, money };
+  }
+  return null;
 }
 
 // ---------- レアキャラの特性 ----------

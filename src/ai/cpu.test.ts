@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { actorOf, applyAction, createGame, GameState, ISLAND } from '../core/game';
 import { nextRandom } from '../core/rng';
-import { decideCpu, Rand } from './cpu';
+import { acceptsTrade, decideCpu, Rand } from './cpu';
 import { PersonalityId, PERSONALITIES } from './personality';
 
 const SETUP = ['A', 'B', 'C', 'D'].map((name) => ({ name, color: '#000' }));
@@ -236,6 +236,92 @@ describe('CPU同士の自動対戦', () => {
     expect(Object.values(reasons).reduce((a, b) => a + b, 0)).toBe(100);
     console.log('勝ち方の内訳', reasons, '性格ごとの勝ち（席1〜3）', wins, '平均ターン', turns / 100);
   }, 120000);
+});
+
+describe('土地の取引の判断', () => {
+  /** P0 の提示に P1 が応答する場面を作る */
+  function offered(setup: (s: GameState) => void, want: number, give: number[], money: number): GameState {
+    const s = newGame(1);
+    setup(s);
+    return applyAction(s, { type: 'offerTrade', to: 1, want, give, money });
+  }
+
+  it('割のいい提示は、どの性格でも受ける', () => {
+    const s = offered((x) => (x.properties[13] = { owner: 1, level: 0 }), 13, [], 500); // 220Gの土地に500G
+    for (const id of ['bold', 'careful', 'schemer'] as const) {
+      expect(decideCpu(s, PERSONALITIES[id], always(0.5))).toEqual({ type: 'answerTrade', accept: true });
+    }
+  });
+
+  it('割に合わない提示は断る', () => {
+    // 氷晶の街のホテル（投資額 1040G）に 500G
+    const s = offered((x) => (x.properties[17] = { owner: 1, level: 3 }), 17, [], 500);
+    expect(acceptsTrade(s, PERSONALITIES.bold, always(0.5))).toBe(false);
+    expect(acceptsTrade(s, PERSONALITIES.careful, always(0.5))).toBe(false);
+  });
+
+  it('積極派は、自分の色グループが揃う土地をもらえるなら少し損でも受け、慎重派は断る', () => {
+    // P1 は森を2つ持ち、王都の大聖堂（400G）を P0 が欲しがる。対価は森の最後の1つ＋180G
+    const s = offered(
+      (x) => {
+        x.properties[5] = { owner: 0, level: 0 };
+        x.properties[6] = { owner: 1, level: 0 };
+        x.properties[7] = { owner: 1, level: 0 };
+        x.properties[30] = { owner: 1, level: 0 };
+      },
+      30,
+      [5],
+      180,
+    );
+    expect(acceptsTrade(s, PERSONALITIES.bold, always(0.5))).toBe(true);
+    expect(acceptsTrade(s, PERSONALITIES.careful, always(0.5))).toBe(false);
+  });
+
+  it('策士は、自分の独占に直結しない取引は適正価格でも受けにくい', () => {
+    const s = offered((x) => (x.properties[13] = { owner: 1, level: 0 }), 13, [], 230); // 投資額 220G
+    expect(acceptsTrade(s, PERSONALITIES.schemer, always(0.5))).toBe(false);
+    expect(acceptsTrade(s, PERSONALITIES.bold, always(0.5))).toBe(true);
+    const s2 = offered((x) => (x.properties[13] = { owner: 1, level: 0 }), 13, [], 300);
+    expect(acceptsTrade(s2, PERSONALITIES.schemer, always(0.5))).toBe(true);
+  });
+
+  it('相手の独占を完成させる土地は、割増でないと渡さない', () => {
+    // P0 は森を2つ持ち、P1 の苔むす泉（140G）で揃う
+    const setup = (x: GameState) => {
+      x.properties[5] = { owner: 1, level: 0 };
+      x.properties[6] = { owner: 0, level: 0 };
+      x.properties[7] = { owner: 0, level: 0 };
+    };
+    const cheap = offered(setup, 5, [], 140); // 投資額ちょうど
+    expect(acceptsTrade(cheap, PERSONALITIES.careful, always(0.5))).toBe(false);
+    const rich = offered(setup, 5, [], 500); // 独占を完成させる分まで見込んだ割増
+    expect(acceptsTrade(rich, PERSONALITIES.careful, always(0.5))).toBe(true);
+  });
+
+  it('策士は、あと1つで色グループが揃う土地を、不要な土地で取りにいく', () => {
+    const s = newGame(1);
+    s.properties[5] = { owner: 1, level: 0 }; // 森の最後の1つ
+    s.properties[6] = { owner: 0, level: 0 };
+    s.properties[7] = { owner: 0, level: 0 };
+    s.properties[13] = { owner: 0, level: 0 }; // 対価に出せる砂漠の市場
+    const d = decideCpu(s, PERSONALITIES.schemer, always(0));
+    // 相手の得にならない取引なので、完成させる割増まで見込んでお金も足す
+    expect(d).toEqual({ type: 'offerTrade', to: 1, want: 5, give: [13], money: 200 });
+  });
+
+  it('提示して受け入れられたら、その手番ではもう取引しない', () => {
+    const s = newGame(1);
+    s.properties[5] = { owner: 1, level: 0 };
+    s.properties[6] = { owner: 0, level: 0 };
+    s.properties[7] = { owner: 0, level: 0 };
+    s.properties[13] = { owner: 0, level: 0 };
+    let next = applyAction(s, decideCpu(s, PERSONALITIES.schemer, always(0)));
+    expect(next.phase.kind).toBe('trade');
+    next = applyAction(next, decideCpu(next, PERSONALITIES.bold, always(0.5)));
+    expect(next.phase.kind).toBe('roll');
+    expect(next.properties[5].owner).toBe(0);
+    expect(decideCpu(next, PERSONALITIES.schemer, always(0)).type).toBe('roll');
+  });
 });
 
 describe('略奪の令状の判断', () => {

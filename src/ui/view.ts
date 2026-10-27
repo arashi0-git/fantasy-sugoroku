@@ -10,6 +10,7 @@ import {
   actorOf,
   aimHitRateOf,
   canFly,
+  canOfferTrade,
   chainLength,
   flyTargets,
   buildOptions,
@@ -42,6 +43,7 @@ import {
   salaryFor,
   sellValue,
   totalAssets,
+  tradeValueOf,
   touristCount,
   TOURIST_SQUARES,
   TRIPLE_GROUPS,
@@ -66,6 +68,8 @@ export interface ViewHandlers {
   puppet(delta: -1 | 0 | 1): void;
   push(target: number, dir: PushDir): void;
   gamble(use: boolean): void;
+  tradeOffer(offer: { to: number; want: number; give: number[]; money: number }): void;
+  tradeAnswer(accept: boolean): void;
   restart(): void;
 }
 
@@ -220,6 +224,8 @@ export class View {
   private pendingCard: CardId | null = null;
   /** 天翔の行き先を選んでいる途中 */
   private pendingFly = false;
+  /** 取引の提示を作っている途中（相手・欲しい土地・対価の土地と金額）。場面が変わったら取り消す */
+  private tradeDraft: { to: number; want: number | null; give: number[]; money: number } | null = null;
   private pendingKey = '';
 
   render(s: GameState, x: ViewExtras) {
@@ -227,10 +233,11 @@ export class View {
     this.human = x.human;
     // いま決めるのがあなたか（守りのカードの割り込みでは、相手の手番でもあなたが決めることがある）
     const myTurn = actorOf(s) === x.human && s.phase.kind !== 'gameover' && !x.busy;
-    const key = `${s.turn}:${s.current}:${s.phase.kind}:${s.cardsUsed}`;
+    const key = `${s.turn}:${s.current}:${s.phase.kind}:${s.cardsUsed}:${s.tradeUsed}`;
     if (key !== this.pendingKey || !myTurn) {
       this.pendingCard = null;
       this.pendingFly = false;
+      this.tradeDraft = null;
     }
     this.pendingKey = key;
     this.renderTiles(s, x, myTurn);
@@ -253,6 +260,7 @@ export class View {
   private cancelCard = () => {
     this.pendingCard = null;
     this.pendingFly = false;
+    this.tradeDraft = null;
     if (this.last) this.render(...this.last);
   };
 
@@ -390,10 +398,10 @@ export class View {
     // CPU の一言（演出中も出す）
     // カードの結果が同じ人のものなら、吹き出しの下にまとめて場所を節約する
     const merged = !!x.speech && !x.busy && !!s.lastCard && s.lastCard.player === x.speech.player;
-    if (x.speech && !this.pendingCard && !this.pendingFly) host.append(this.speechBubble(s, x.speech, merged ? s.lastCard : null));
+    if (x.speech && !this.pendingCard && !this.pendingFly && !this.tradeDraft) host.append(this.speechBubble(s, x.speech, merged ? s.lastCard : null));
 
     // 観光地の守り切り中は、ずっと知らせる
-    if (s.touristClaim !== null && !this.pendingCard && !this.pendingFly) {
+    if (s.touristClaim !== null && !this.pendingCard && !this.pendingFly && !this.tradeDraft) {
       const c = s.players[s.touristClaim];
       const mine = c.id === x.human;
       host.append(
@@ -407,8 +415,8 @@ export class View {
       );
     }
 
-    // 直前の出来事（カード・支払い・ゾロ目）。カードの対象を選んでいる間は、場所を空けるために出さない
-    if (!x.busy && !this.pendingCard && !this.pendingFly) {
+    // 直前の出来事（カード・支払い・ゾロ目）。カードの対象や取引を選んでいる間は、場所を空けるために出さない
+    if (!x.busy && !this.pendingCard && !this.pendingFly && !this.tradeDraft) {
       const ph = s.phase.kind;
       if (s.lastMission) host.append(this.missionNotice(s));
       if (s.lastCard && !merged) host.append(this.cardNotice(s));
@@ -418,9 +426,11 @@ export class View {
 
     const panel = this.pendingFly
       ? this.flyPanel()
-      : this.pendingCard
-        ? this.cardTargetPanel(s, this.pendingCard)
-        : this.phasePanel(s, myTurn);
+      : this.tradeDraft
+        ? this.tradePanel(s)
+        : this.pendingCard
+          ? this.cardTargetPanel(s, this.pendingCard)
+          : this.phasePanel(s, myTurn);
     if (panel) host.append(panel);
 
     // 盤面の中央に収まりきらないとき：まず前の人のカードのお知らせを省き、それでもあふれるなら横の列へ移す
@@ -461,6 +471,135 @@ export class View {
     const cancel = el('button', 'btn quiet', 'やめる');
     cancel.addEventListener('click', this.cancelCard);
     actions.append(cancel);
+    panel.append(actions);
+    return panel;
+  }
+
+  /** 土地の取引の提示を作る画面（相手 → 欲しい土地 → 対価の土地と金額） */
+  private tradePanel(s: GameState): HTMLElement {
+    const me = s.players[s.current];
+    const d = this.tradeDraft!;
+    const panel = el('div', 'panel');
+    panel.append(el('h3', '', '土地の取引'));
+    panel.append(el('p', '', '相手の土地1つを指名して、自分の土地とお金で交換を持ちかけます。成立すると、土地は建物ごと持ち主が移ります。'));
+
+    const rerender = () => {
+      if (this.last) this.render(...this.last);
+    };
+    // 価値の目安は、相手にとっての価値でそろえて見せる
+    const valueTo = (sq: number) => tradeValueOf(s, sq, d.to);
+
+    // 相手の選択
+    panel.append(el('h4', 'trade-head', '相手'));
+    const oppList = el('ul', 'choice-list');
+    for (const p of s.players) {
+      if (p.id === me.id || p.bankrupt || ownedSquares(s, p.id).length === 0) continue;
+      const li = el('li');
+      const b = el('button');
+      if (p.id === d.to) b.classList.add('selected');
+      b.append(el('span', '', p.name), el('span', 'cost', `土地 ${ownedSquares(s, p.id).length}・総資産 ${fmt(totalAssets(s, p.id))}`));
+      b.addEventListener('click', () => {
+        d.to = p.id;
+        d.want = null;
+        rerender();
+      });
+      li.append(b);
+      oppList.append(li);
+    }
+    panel.append(oppList);
+
+    // 欲しい土地
+    panel.append(el('h4', 'trade-head', '欲しい土地'));
+    const wantList = el('ul', 'choice-list');
+    for (const sq of ownedSquares(s, d.to)) {
+      const prop = s.properties[sq];
+      const li = el('li');
+      const b = el('button');
+      if (sq === d.want) b.classList.add('selected');
+      b.append(
+        el('span', '', BOARD[sq].name),
+        el('span', 'cost', `${isTourist(sq) ? '観光地' : LEVEL_NAMES[prop.level]}・価値 ${fmt(valueTo(sq))}`),
+      );
+      b.addEventListener('click', () => {
+        d.want = sq;
+        rerender();
+      });
+      li.append(b);
+      wantList.append(li);
+    }
+    panel.append(wantList);
+
+    // 対価に出す自分の土地（複数選択）
+    panel.append(el('h4', 'trade-head', '対価に出す自分の土地（任意・複数可）'));
+    const mine = ownedSquares(s, me.id);
+    if (!mine.length) {
+      panel.append(el('p', 'hint', '自分の土地は持っていないので、対価はお金だけになります'));
+    } else {
+      const giveList = el('ul', 'choice-list');
+      for (const sq of mine) {
+        const prop = s.properties[sq];
+        const on = d.give.includes(sq);
+        const li = el('li');
+        const b = el('button');
+        if (on) b.classList.add('selected');
+        b.append(
+          el('span', '', `${on ? '✓ ' : ''}${BOARD[sq].name}`),
+          el('span', 'cost', `${isTourist(sq) ? '観光地' : LEVEL_NAMES[prop.level]}・価値 ${fmt(valueTo(sq))}`),
+        );
+        b.addEventListener('click', () => {
+          d.give = on ? d.give.filter((x) => x !== sq) : [...d.give, sq];
+          rerender();
+        });
+        li.append(b);
+        giveList.append(li);
+      }
+      panel.append(giveList);
+    }
+
+    // 対価のお金
+    const actions = el('div', 'actions');
+    const offer = el('button', 'btn', '取引を持ちかける');
+    const syncOffer = () => {
+      offer.disabled = d.want === null || (d.give.length === 0 && d.money <= 0) || d.money > me.money;
+    };
+    const summary = el('p', 'trade-summary');
+    const updateSummary = () => {
+      const giveTotal = d.give.reduce((sum, sq) => sum + valueTo(sq), 0) + d.money;
+      summary.textContent =
+        d.want === null
+          ? `あなたの対価の価値：${fmt(giveTotal)}（欲しい土地を選んでください）`
+          : `あなたの対価の価値 ${fmt(giveTotal)} ／ ${BOARD[d.want].name} の価値 ${fmt(valueTo(d.want))}（どちらも相手にとっての価値）`;
+    };
+    const moneyRow = el('div', 'trade-money');
+    const label = el('label', '', '対価のお金');
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '50';
+    input.max = String(me.money);
+    input.value = String(d.money);
+    input.setAttribute('aria-label', '対価のお金');
+    input.addEventListener('input', () => {
+      const v = Math.floor(Number(input.value) || 0);
+      d.money = Math.max(0, Math.min(me.money, v));
+      updateSummary();
+      syncOffer();
+    });
+    moneyRow.append(label, input, el('span', 'cost', `所持金 ${fmt(me.money)}`));
+    panel.append(moneyRow);
+    updateSummary();
+    panel.append(summary);
+
+    offer.title = '相手が断ることもあります';
+    offer.addEventListener('click', () => {
+      const o = { to: d.to, want: d.want!, give: [...d.give], money: d.money };
+      this.tradeDraft = null;
+      this.h.tradeOffer(o);
+    });
+    const cancel = el('button', 'btn quiet', 'やめる');
+    cancel.addEventListener('click', this.cancelCard);
+    actions.append(offer, cancel);
+    syncOffer();
     panel.append(actions);
     return panel;
   }
@@ -646,6 +785,18 @@ export class View {
         });
         actions.append(f);
       }
+      // 土地の取引：相手に土地を持っている人がいるときだけ出せる
+      const tradeTargets = s.players.filter((p) => p.id !== me.id && !p.bankrupt && ownedSquares(s, p.id).length > 0);
+      if (canOfferTrade(s) && tradeTargets.length) {
+        const t = el('button', 'btn quiet', '土地の取引');
+        t.disabled = off;
+        t.title = '相手の土地を、自分の土地やお金と交換してもらう交渉ができます（1回の手番に1回まで）';
+        t.addEventListener('click', () => {
+          this.tradeDraft = { to: tradeTargets[0].id, want: null, give: [], money: 0 };
+          if (this.last) this.render(...this.last);
+        });
+        actions.append(t);
+      }
       wrap.append(actions);
       wrap.append(el('p', 'hint', `止めたゾーンの出目が出やすくなります（${Math.round(aimHitRateOf(me) * 100)}%）`));
       if (myTurn) queueMicrotask(() => b.focus());
@@ -781,6 +932,39 @@ export class View {
       }
       panel.append(list);
       panel.append(this.passButton('押し出さない', off));
+      return panel;
+    }
+
+    if (phase.kind === 'trade') {
+      const o = phase.offer;
+      const from = s.players[o.from];
+      const to = s.players[o.to];
+      const panel = el('div', 'panel react');
+      if (o.to !== this.human) {
+        panel.append(el('h3', '', `${to.name} が取引を考えています`));
+        panel.append(el('p', '', `${from.name} が ${BOARD[o.want].name} を求めています。返事を待っています。`));
+        return panel;
+      }
+      const wantProp = s.properties[o.want];
+      panel.append(el('h3', '', `${from.name} から取引の申し出`));
+      panel.append(
+        el('p', '', `${from.name} は、あなたの ${BOARD[o.want].name}（${isTourist(o.want) ? '観光地' : LEVEL_NAMES[wantProp.level]}）が欲しいそうです。受けると土地は建物ごと交換されます。`),
+      );
+      // 渡すものと、もらうものを並べて見せる（価値はあなたにとっての値でそろえる）
+      const compare = el('div', 'trade-compare');
+      const giveLine = el('p');
+      giveLine.append(el('span', 'tc-label', 'あなたが渡す'), `${BOARD[o.want].name}（価値 ${fmt(tradeValueOf(s, o.want, o.to))}）`);
+      compare.append(giveLine);
+      const getParts = o.give.map(
+        (sq) => `${BOARD[sq].name}（${isTourist(sq) ? '観光地' : LEVEL_NAMES[s.properties[sq].level]}・価値 ${fmt(tradeValueOf(s, sq, o.to))}）`,
+      );
+      if (o.money > 0) getParts.push(fmt(o.money));
+      const gainTotal = o.give.reduce((sum, sq) => sum + tradeValueOf(s, sq, o.to), 0) + o.money;
+      const getLine = el('p');
+      getLine.append(el('span', 'tc-label', 'あなたがもらう'), `${getParts.join(' と ')}（合計 ${fmt(gainTotal)}）`);
+      compare.append(getLine);
+      panel.append(compare);
+      panel.append(this.twoButtons('受ける', '断る', off, () => this.h.tradeAnswer(true), () => this.h.tradeAnswer(false), 'second'));
       return panel;
     }
 

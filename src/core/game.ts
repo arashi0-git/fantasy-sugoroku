@@ -46,6 +46,15 @@ export interface Property {
   level: number;
 }
 
+/** 土地の取引の提示内容。from が to の土地 want を指名し、対価として give の土地と money を出す */
+export interface TradeOffer {
+  from: number;
+  to: number;
+  want: number;
+  give: number[];
+  money: number;
+}
+
 /** 守りのカードで割り込める場面 */
 export type ReactContext =
   | { type: 'rent'; square: number; rent: number; owner: number }
@@ -65,6 +74,8 @@ export type Phase =
   | { kind: 'push'; pusher: number; targets: number[] }
   /** 大勝負：通行料を払う前に、勝負するか選ぶ */
   | { kind: 'gamble'; square: number; rent: number; owner: number }
+  /** 土地の取引：offer.to が受けるか断るか選ぶ */
+  | { kind: 'trade'; offer: TradeOffer }
   | { kind: 'buy'; square: number }
   | { kind: 'build'; square: number }
   | { kind: 'buyout'; square: number }
@@ -130,6 +141,8 @@ export interface GameState {
   lastCard: { player: number; card?: CardId; text: string; title?: string } | null;
   /** この手番で使った攻めのカードの枚数（ふつうは1回の手番に1枚まで） */
   cardsUsed: number;
+  /** この手番でもう取引を持ちかけたか（持ちかけるのは1回の手番に1回まで） */
+  tradeUsed: boolean;
   /** 直近に達成された使命。次にサイコロが振られるまで表示 */
   lastMission: { player: number; mission: MissionId } | null;
   /** 観光地を4つ揃え、守り切りを待っている人（次の自分の番まで4つとも持っていれば勝利） */
@@ -163,7 +176,11 @@ export type Action =
   /** 剛腕：target を dir マス押し出す（負なら戻る向き。±1か±2） */
   | { type: 'push'; target: number; dir: PushDir }
   /** 大勝負：勝負するか */
-  | { type: 'gamble'; use: boolean };
+  | { type: 'gamble'; use: boolean }
+  /** 土地の取引を持ちかける（to の土地 want を指名し、対価に give の土地と money を出す） */
+  | { type: 'offerTrade'; to: number; want: number; give: number[]; money: number }
+  /** 持ちかけられた取引を受けるか断るか */
+  | { type: 'answerTrade'; accept: boolean };
 
 export class GameError extends Error {}
 
@@ -275,6 +292,7 @@ export function createGame(players: PlayerSetup[], seed = Date.now()): GameState
     lastPayment: null,
     lastCard: null,
     cardsUsed: 0,
+    tradeUsed: false,
     lastMission: null,
     touristClaim: null,
     log: [{ turn: 1, player: null, text: `ゲーム開始。順番は ${players.map((p) => p.name).join(' → ')}（ターンごとに先頭が1人ずつずれる）` }],
@@ -307,10 +325,11 @@ function drawFromDeck(s: GameState, withInstant: boolean): CardId {
   return pool[pool.length - 1].id;
 }
 
-/** いま行動を決める人（守りのカードの割り込みでは、手番の人とは限らない） */
+/** いま行動を決める人（守りのカードの割り込みや取引では、手番の人とは限らない） */
 export function actorOf(s: GameState): number {
   if (s.phase.kind === 'react' || s.phase.kind === 'puppet') return s.phase.responder;
   if (s.phase.kind === 'push') return s.phase.pusher;
+  if (s.phase.kind === 'trade') return s.phase.offer.to;
   return s.current;
 }
 
@@ -347,6 +366,30 @@ export function investedValue(state: GameState, square: number): number {
   const prop = state.properties[square];
   if (!prop) return 0;
   return landPrice(square) + buildCost(square, 0, prop.level);
+}
+
+/**
+ * 取引での土地の価値（playerId がその土地を持つとしたときの値）。
+ * 投資額を基礎に、その人の色グループや観光地のセットが完成する土地は大きく割り増し、
+ * 完成に近づく土地（グループ2つ以上・観光地あと1つ）も少し割り増す。
+ */
+export function tradeValueOf(state: GameState, square: number, playerId: number): number {
+  const base = investedValue(state, square);
+  if (!base) return 0;
+  let rate = 1;
+  const g = BOARD[square].group;
+  if (g && isLand(square)) {
+    const squares = GROUP_SQUARES[g];
+    const after = squares.filter((x) => x === square || state.properties[x]?.owner === playerId).length;
+    if (after >= squares.length) rate = CONFIG.tradeCompleteRate;
+    else if (after >= 2) rate = CONFIG.tradeProgressRate;
+  }
+  if (isTourist(square)) {
+    const mine = TOURIST_SQUARES.filter((x) => x === square || state.properties[x]?.owner === playerId).length;
+    if (mine >= TOURIST_SQUARES.length) rate = Math.max(rate, CONFIG.tradeCompleteRate);
+    else if (mine >= TOURIST_SQUARES.length - 1) rate = Math.max(rate, CONFIG.tradeProgressRate);
+  }
+  return Math.round(base * rate);
 }
 
 /** 土地の、段階ごとの基本の通行料（祭りの倍率は含まない） */
@@ -674,6 +717,12 @@ export function applyAction(prev: GameState, action: Action): GameState {
       break;
     case 'gamble':
       gamble(s, action.use);
+      break;
+    case 'offerTrade':
+      offerTrade(s, action);
+      break;
+    case 'answerTrade':
+      answerTrade(s, action.accept);
       break;
   }
   checkTouristClaim(s);
@@ -1633,23 +1682,103 @@ function doBuyout(s: GameState, sq: number, raid = false) {
  * 独占勝利の条件を満たしたらゲームを終えて true を返す。
  */
 function checkMonopoly(s: GameState, acquired: number): boolean {
-  const p = me(s);
+  return checkMonopolyFor(s, s.current, acquired);
+}
+
+/** checkMonopoly のプレイヤー指定版（取引では手番でない人が土地を受け取ることもある） */
+function checkMonopolyFor(s: GameState, playerId: number, acquired: number): boolean {
+  const p = s.players[playerId];
   const g = BOARD[acquired].group;
-  if (g && GROUP_SQUARES[g].every((sq) => s.properties[sq]?.owner === p.id)) {
-    log(s, p.id, `${GROUPS[g].name}の土地をすべて手に入れた（色グループ独占）`);
+  if (g && GROUP_SQUARES[g].every((sq) => s.properties[sq]?.owner === playerId)) {
+    log(s, playerId, `${GROUPS[g].name}の土地をすべて手に入れた（色グループ独占）`);
   }
-  const groups = completedGroups(s, p.id);
+  const groups = completedGroups(s, playerId);
   if (groups.length >= TRIPLE_GROUPS) {
-    s.phase = { kind: 'gameover', winner: p.id, reason: 'triple' };
+    s.phase = { kind: 'gameover', winner: playerId, reason: 'triple' };
     const names = groups.map((x) => GROUPS[x].name).join('・');
     log(s, null, `${p.name} の勝利（色グループ3つ独占：${names}）`);
     return true;
   }
-  if (isTourist(acquired) && ownsAllTourist(s, p.id) && s.touristClaim !== p.id) {
-    s.touristClaim = p.id;
-    log(s, p.id, `${p.name} が観光地を${TOURIST_SQUARES.length}つすべて揃えた。次の ${p.name} の番まで守り切れば勝利`);
+  if (isTourist(acquired) && ownsAllTourist(s, playerId) && s.touristClaim !== playerId) {
+    s.touristClaim = playerId;
+    log(s, playerId, `${p.name} が観光地を${TOURIST_SQUARES.length}つすべて揃えた。次の ${p.name} の番まで守り切れば勝利`);
   }
   return false;
+}
+
+// ---------- 土地の取引 ----------
+
+/** いま取引を持ちかけられるか（サイコロを振る前で、この手番にまだ持ちかけていない） */
+export function canOfferTrade(s: GameState): boolean {
+  return s.phase.kind === 'roll' && !s.tradeUsed;
+}
+
+/** 取引の対価の短い表記（土地の名前と金額） */
+function tradeGiveText(give: number[], money: number): string {
+  const parts = give.map((sq) => BOARD[sq].name);
+  if (money > 0) parts.push(`${money.toLocaleString('ja-JP')}G`);
+  return parts.join(' と ');
+}
+
+/** 取引の提示内容の検証。問題があれば理由を返し、なければ null */
+function tradeProblem(s: GameState, o: { to: number; want: number; give: number[]; money: number }): string | null {
+  const from = me(s);
+  const to = s.players[o.to];
+  if (!to || o.to === from.id) return '取引の相手が不正です';
+  if (to.bankrupt) return '破産した相手とは取引できません';
+  const wantProp = s.properties[o.want];
+  if (!isProperty(o.want) || !wantProp) return '相手の土地を選んでください';
+  if (wantProp.owner !== to.id) return 'その土地は相手のものではありません';
+  if (new Set(o.give).size !== o.give.length) return '対価の土地が重なっています';
+  for (const sq of o.give) {
+    if (s.properties[sq]?.owner !== from.id) return '対価に出せるのは自分の土地だけです';
+  }
+  if (!Number.isInteger(o.money) || o.money < 0) return '金額が不正です';
+  if (o.money > from.money) return '所持金を超える金額は出せません';
+  if (o.give.length === 0 && o.money <= 0) return '対価が必要です';
+  return null;
+}
+
+function offerTrade(s: GameState, a: Extract<Action, { type: 'offerTrade' }>) {
+  expectPhase(s, 'roll');
+  if (s.tradeUsed) throw new GameError('取引は1回の手番に1回までです');
+  const problem = tradeProblem(s, a);
+  if (problem) throw new GameError(problem);
+  const from = me(s);
+  const to = s.players[a.to];
+  s.tradeUsed = true;
+  log(s, from.id, `${to.name} に取引を持ちかけた：${BOARD[a.want].name} が欲しい。対価は ${tradeGiveText(a.give, a.money)}`);
+  s.phase = { kind: 'trade', offer: { from: from.id, to: to.id, want: a.want, give: [...a.give], money: a.money } };
+}
+
+/** 土地の持ち主を変える。開かれていた祭りは終わる（買収と同じ） */
+function transferProperty(s: GameState, square: number, to: number) {
+  s.properties[square].owner = to;
+  if (s.festivals.includes(square)) {
+    s.festivals = s.festivals.filter((x) => x !== square);
+    log(s, null, `${BOARD[square].name} の祭りは持ち主が変わって終わった`);
+  }
+}
+
+function answerTrade(s: GameState, accept: boolean) {
+  if (s.phase.kind !== 'trade') throw new GameError('今は取引に答える場面ではありません');
+  const o = s.phase.offer;
+  const from = s.players[o.from];
+  const to = s.players[o.to];
+  s.phase = { kind: 'roll' };
+  if (!accept) {
+    log(s, to.id, `${from.name} の取引を断った`);
+    return;
+  }
+  // 土地は建物の段階を保ったまま持ち主が移り、お金も移る
+  from.money -= o.money;
+  to.money += o.money;
+  transferProperty(s, o.want, from.id);
+  for (const sq of o.give) transferProperty(s, sq, to.id);
+  log(s, to.id, `取引成立：${BOARD[o.want].name} は ${from.name} のものに、対価の ${tradeGiveText(o.give, o.money)} は ${to.name} のものになった`);
+  // どちらかが独占の条件を満たしたら、そこでゲームが終わる
+  if (checkMonopolyFor(s, from.id, o.want)) return;
+  for (const sq of o.give) if (checkMonopolyFor(s, to.id, sq)) return;
 }
 
 export function ownsAllTourist(s: GameState, playerId: number): boolean {
@@ -1850,6 +1979,7 @@ function endTurn(s: GameState) {
   }
   s.doublesInRow = 0;
   s.cardsUsed = 0;
+  s.tradeUsed = false;
   const n = s.players.length;
   let order = roundOrder(s.turn, n);
   let k = order.indexOf(s.current);
