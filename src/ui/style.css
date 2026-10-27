@@ -2398,6 +2398,41 @@ body.tilt-on .board.shake {
   }
 }
 
+/* ---------- カメラ追尾モード（盤面を拡大し、手番のコマを中心に追いかける） ---------- */
+
+/* 盤面のビューポート：カメラで拡大・移動した盤面がここからはみ出さないようにする */
+.board-view {
+  width: var(--board);
+  height: var(--board);
+  overflow: hidden;
+  border-radius: 10px;
+}
+body.cam-on .board {
+  /* コマの移動（170ms刻み）に滑らかに追いつくよう、少し長めの遷移にする */
+  transition: transform 0.45s ease;
+  will-change: transform;
+}
+body.cam-drag .board {
+  /* ドラッグ中は遷移を切って、指・カーソルの動きに遅れずついてくるようにする */
+  transition: none;
+}
+body.cam-on .board-view {
+  touch-action: none;
+  cursor: grab;
+}
+body.cam-drag .board-view {
+  cursor: grabbing;
+}
+/* 揺れ演出のキーフレームは transform を上書きしてカメラ位置を壊すので、カメラ中は止める */
+body.cam-on .board.shake {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.cam-on .board {
+    transition: none;
+  }
+}
+
 /* ---------- 縦向きのときの横画面案内 ---------- */
 
 .rotate-hint {
@@ -2457,6 +2492,10 @@ body.tilt-on .board.shake {
     gap: 12px;
   }
   /* 盤面は左カラムいっぱいに広げる（マスは幅÷9が効くので、横向きでは幅が大きく取れる） */
+  .board-view {
+    width: 100%;
+    height: 100%;
+  }
   .board {
     width: 100%;
     height: 100%;
