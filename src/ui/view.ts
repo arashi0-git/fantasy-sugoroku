@@ -104,6 +104,16 @@ export interface CollectionHandlers {
   back(): void;
 }
 
+/** 下部タブバーのタブ */
+export type NavTab = 'home' | 'gacha' | 'collection';
+
+export interface NavBarState {
+  /** いま表示している画面に対応するタブ（対応するタブがない画面＝キャラ選択・対戦では null） */
+  active: NavTab | null;
+  /** 対戦の途中かどうか。途中は対戦を抜けないと行けないガチャ・コレクションを無効化する */
+  lockMeta: boolean;
+}
+
 export interface ViewExtras {
   /** アニメーション中のコマの表示位置（プレイヤーID → マス） */
   shownPositions: number[];
@@ -295,6 +305,8 @@ export class View {
     this.buildSheet();
     this.buildTiltToggle();
     this.buildRotateHint();
+    this.buildTabBar();
+    this.buildConfirmDialog();
     requestAnimationFrame(this.tickGauge);
   }
 
@@ -485,6 +497,101 @@ export class View {
     });
     hint.append(el('span', 'rotate-hint-text', '📱 横画面が見やすいよ'), close);
     document.body.append(hint);
+  }
+
+  // ---- 下部タブバー（全画面共通の導線） ----
+  private navButtons = new Map<NavTab, HTMLButtonElement>();
+  private navHandler: ((tab: NavTab) => void) | null = null;
+
+  /** 画面下に常時出すタブバー。ホーム（タイトル）／ガチャ／コレクションへ直接行き来するための導線をここにまとめる */
+  private buildTabBar() {
+    const bar = el('nav', 'tabbar');
+    bar.setAttribute('aria-label', 'メインメニュー');
+    const tabs: { id: NavTab; icon: string; label: string }[] = [
+      { id: 'home', icon: '🏠', label: 'ホーム' },
+      { id: 'gacha', icon: '🎰', label: 'ガチャ' },
+      { id: 'collection', icon: '📖', label: 'コレクション' },
+    ];
+    for (const t of tabs) {
+      const b = el('button', 'tab-btn');
+      b.type = 'button';
+      const icon = el('span', 'tab-icon', t.icon);
+      icon.setAttribute('aria-hidden', 'true');
+      b.append(icon, el('span', 'tab-label', t.label));
+      b.addEventListener('click', () => this.navHandler?.(t.id));
+      this.navButtons.set(t.id, b);
+      bar.append(b);
+    }
+    document.body.append(bar);
+  }
+
+  /** タブが押されたときの処理を登録する（画面遷移そのものは main が担う） */
+  setNavHandler(h: (tab: NavTab) => void) {
+    this.navHandler = h;
+  }
+
+  /** タブバーの見た目を現在の画面に合わせる（アクティブ表示と、対戦中の無効化） */
+  setNavState(s: NavBarState) {
+    for (const [tab, b] of this.navButtons) {
+      const active = s.active === tab;
+      b.classList.toggle('active', active);
+      if (active) b.setAttribute('aria-current', 'page');
+      else b.removeAttribute('aria-current');
+      b.disabled = s.lockMeta && tab !== 'home';
+      if (b.disabled) b.title = '対戦中は開けません';
+      else b.removeAttribute('title');
+    }
+  }
+
+  // ---- 確認ダイアログ ----
+  private confirmEl!: HTMLElement;
+  private confirmMsg!: HTMLElement;
+  private confirmOkBtn!: HTMLButtonElement;
+  private confirmResolve: ((ok: boolean) => void) | null = null;
+
+  /** 確認ダイアログの土台を1回だけ作る（対戦をやめて移動する等、取り返しのつかない遷移の前に使う） */
+  private buildConfirmDialog() {
+    const overlay = el('div', 'confirm-overlay');
+    overlay.hidden = true;
+    const box = el('section', 'confirm-box');
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', '確認');
+    this.confirmMsg = el('p', 'confirm-msg');
+    const btns = el('div', 'confirm-btns');
+    const cancel = el('button', 'btn quiet', 'キャンセル');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => this.settleConfirm(false));
+    this.confirmOkBtn = el('button', 'btn confirm-ok', 'OK');
+    this.confirmOkBtn.type = 'button';
+    this.confirmOkBtn.addEventListener('click', () => this.settleConfirm(true));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.settleConfirm(false);
+    });
+    btns.append(cancel, this.confirmOkBtn);
+    box.append(this.confirmMsg, btns);
+    overlay.append(box);
+    document.body.append(overlay);
+    this.confirmEl = overlay;
+  }
+
+  private settleConfirm(ok: boolean) {
+    this.confirmEl.hidden = true;
+    const r = this.confirmResolve;
+    this.confirmResolve = null;
+    r?.(ok);
+  }
+
+  /** 確認ダイアログを出し、OK なら true、キャンセル・外側タップなら false を返す */
+  confirmDialog(message: string, okText: string): Promise<boolean> {
+    this.settleConfirm(false);
+    this.confirmMsg.textContent = message;
+    this.confirmOkBtn.textContent = okText;
+    this.confirmEl.hidden = false;
+    this.confirmOkBtn.focus();
+    return new Promise((resolve) => {
+      this.confirmResolve = resolve;
+    });
   }
 
   /** マスをタップしたとき：対象選択中ならそちらを優先し、それ以外は詳細シートを開く */
@@ -2142,7 +2249,7 @@ export class View {
   }
 
   /** 起動直後のタイトル画面。「はじめる」でキャラ選びへ進む */
-  showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null, nav?: { onGacha: () => void; onCollection: () => void }) {
+  showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null) {
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
@@ -2168,21 +2275,7 @@ export class View {
       onStart();
     });
     wrap.append(startBtn);
-    if (nav) {
-      const navRow = el('div', 'title-nav');
-      const gachaBtn = el('button', 'title-sub', '🎰 ガチャ');
-      gachaBtn.addEventListener('click', () => {
-        host.hidden = true;
-        nav.onGacha();
-      });
-      const colBtn = el('button', 'title-sub', '📖 コレクション');
-      colBtn.addEventListener('click', () => {
-        host.hidden = true;
-        nav.onCollection();
-      });
-      navRow.append(gachaBtn, colBtn);
-      wrap.append(navRow);
-    }
+    // ガチャ・コレクションへの導線は下部タブバーに一本化した（タイトル内のボタンは置かない）
     const howBtn = el('button', 'title-how', 'あそびかた');
     const how = el('div', 'title-rules');
     how.hidden = true;
