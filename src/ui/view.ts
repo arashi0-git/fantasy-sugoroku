@@ -5,6 +5,7 @@ import { CardId, CARDS } from '../data/cards';
 import { CHARACTER_LIST, CHARACTERS, CharacterId, STAT_NAMES, STAT_ORDER, STAT_TEXT } from '../data/characters';
 import { CONFIG, LEVEL, LEVEL_NAMES } from '../data/config';
 import { MISSIONS } from '../data/missions';
+import { GameReward, levelOf, ownsChar, Profile } from '../meta/profile';
 import {
   Action,
   actorOf,
@@ -99,6 +100,10 @@ export interface ViewExtras {
   speech: { player: number; text: string; turn: number; current: number } | null;
   /** これまでの CPU の一言。at = 言ったときのログの件数（ログのその位置に差し込んで表示する） */
   sayLog: { at: number; player: number; text: string }[];
+  /** あなたのプロフィール（所持コイン・装備中の見た目などの表示に使う） */
+  profile?: Profile | null;
+  /** この対戦で得た報酬（結果画面に出す。まだ確定していなければ null） */
+  reward?: (GameReward & { charName: string; rank: number }) | null;
 }
 
 const KIND_LABEL: Record<SquareKind, string> = {
@@ -420,7 +425,7 @@ export class View {
     c.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
     if (s.phase.kind === 'gameover') {
-      host.append(this.resultPanel(s));
+      host.append(this.resultPanel(s, x));
       return;
     }
 
@@ -1514,7 +1519,7 @@ export class View {
     return wrap;
   }
 
-  private resultPanel(s: GameState): HTMLElement {
+  private resultPanel(s: GameState, x: ViewExtras): HTMLElement {
     if (s.phase.kind !== 'gameover') throw new Error();
     const winner = s.players[s.phase.winner];
     const panel = el('div', 'panel result');
@@ -1542,6 +1547,19 @@ export class View {
     if (ms.childElementCount) {
       panel.append(el('h4', '', '秘密の使命'));
       panel.append(ms);
+    }
+    // 対戦の報酬（スターコインと経験値）
+    if (x.reward) {
+      const r = x.reward;
+      const box = el('div', 'reward-box');
+      box.append(el('h4', '', '対戦の報酬'));
+      const coinLine = el('p', 'reward-line', `🪙 スターコイン +${r.coins}（${r.rank}位 ${r.rankCoins}${r.bonus ? ` ＋ 独占ボーナス ${r.bonus}` : ''}）`);
+      box.append(coinLine);
+      const leveled = r.levelAfter > r.levelBefore;
+      box.append(
+        el('p', 'reward-line', `${r.charName}に経験値 +${r.xp}　Lv.${r.levelBefore} → Lv.${r.levelAfter}${leveled ? '　レベルアップ！' : ''}`),
+      );
+      panel.append(box);
     }
     // 勝利の紙吹雪（色は勝者の色＋金などを混ぜる。位置やタイミングは決定的にばらす）
     const confetti = el('div', 'confetti');
@@ -1646,7 +1664,7 @@ export class View {
   }
 
   /** 起動直後のタイトル画面。「はじめる」でキャラ選びへ進む */
-  showTitle(host: HTMLElement, onStart: () => void) {
+  showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null) {
     host.replaceChildren();
     host.hidden = false;
     const wrap = el('div', 'title-wrap');
@@ -1655,6 +1673,7 @@ export class View {
     logo.append(el('span', 'logo-line', 'ファンタジー'), el('span', 'logo-line logo-line-2', 'すごろく'));
     wrap.append(logo);
     wrap.append(el('p', 'title-tagline', '土地を買って、建てて、独占を狙え。'));
+    if (profile) wrap.append(el('p', 'title-coins', `🪙 スターコイン ${profile.coins.toLocaleString('ja-JP')}`));
     const icons = el('p', 'title-icons');
     icons.append(el('span', '', '🎲'), el('span', '', '🏰'), el('span', '', '🪙'));
     wrap.append(icons);
@@ -1685,8 +1704,8 @@ export class View {
     host.append(wrap);
   }
 
-  /** ゲーム開始前のキャラ選び */
-  showCharacterSelect(host: HTMLElement, onPick: (id: CharacterId) => void) {
+  /** ゲーム開始前のキャラ選び。profile があれば未所持キャラをロックし、所持キャラにレベルを出す */
+  showCharacterSelect(host: HTMLElement, onPick: (id: CharacterId) => void, profile?: Profile | null) {
     host.replaceChildren();
     host.hidden = false;
     const wrap = el('div', 'select-wrap');
@@ -1701,7 +1720,8 @@ export class View {
     let shown = 0;
     for (const c of CHARACTER_LIST) {
       const li = el('li');
-      const card = el('button', 'char-card' + (c.rare ? ' rare' : ''));
+      const owned = !profile || ownsChar(profile, c.id);
+      const card = el('button', 'char-card' + (c.rare ? ' rare' : '') + (owned ? '' : ' locked'));
       card.style.setProperty('--c', c.color);
       card.style.animationDelay = `${shown++ * 45}ms`;
       const head = el('div', 'char-head');
@@ -1711,13 +1731,22 @@ export class View {
       nameBox.append(el('span', 'char-title', c.title), el('span', 'char-name', c.name));
       head.append(emblem, nameBox);
       if (c.rare) head.append(el('span', 'rare-badge', '★レア'));
+      if (profile && owned) {
+        const lb = profile.limitBreak[c.id] ?? 0;
+        head.append(el('span', 'char-level', `Lv.${levelOf(profile, c.id)}${lb > 0 ? ` ★${lb}` : ''}`));
+      }
       const trait = el('div', 'char-trait');
       trait.append(el('span', 'trait-name', c.trait.name), el('span', 'trait-text', c.trait.text));
       card.append(head, this.statRow(c.id, true), trait);
-      card.addEventListener('click', () => {
-        host.hidden = true;
-        onPick(c.id);
-      });
+      if (owned) {
+        card.addEventListener('click', () => {
+          host.hidden = true;
+          onPick(c.id);
+        });
+      } else {
+        card.disabled = true;
+        card.append(el('p', 'char-lock', '🔒 ガチャで解放'));
+      }
       li.append(card);
       (c.rare ? rareGrid : grid).append(li);
     }
@@ -1726,7 +1755,7 @@ export class View {
     rareHead.append(el('h2', '', 'レアキャラ'), el('p', '', '特性が強く、ほかのプレイヤーに直接手を出せるキャラです。CPUとして出てくることもあります。'));
     wrap.append(rareHead, rareGrid);
     host.append(wrap);
-    queueMicrotask(() => (grid.querySelector('button') as HTMLButtonElement | null)?.focus());
+    queueMicrotask(() => (grid.querySelector('button:not(:disabled)') as HTMLButtonElement | null)?.focus());
   }
 
   private renderLog(s: GameState, x: ViewExtras) {
