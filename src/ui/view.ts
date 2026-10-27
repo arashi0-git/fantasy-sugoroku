@@ -1293,7 +1293,9 @@ export class View {
     host.hidden = false;
     const wrap = el('div', 'title-wrap');
     wrap.append(el('p', 'title-kicker', 'すごろく型・資産ゲーム'));
-    wrap.append(el('h1', 'title-logo', 'ファンタジーすごろく'));
+    const logo = el('h1', 'title-logo');
+    logo.append(el('span', 'logo-line', 'ファンタジー'), el('span', 'logo-line logo-line-2', 'すごろく'));
+    wrap.append(logo);
     wrap.append(el('p', 'title-tagline', '土地を買って、建てて、独占を狙え。'));
     const icons = el('p', 'title-icons');
     icons.append(el('span', '', '🎲'), el('span', '', '🏰'), el('span', '', '🪙'));
@@ -1338,13 +1340,19 @@ export class View {
     const makeGrid = () => el('ul', 'select-grid');
     const grid = makeGrid();
     const rareGrid = makeGrid();
+    let shown = 0;
     for (const c of CHARACTER_LIST) {
       const li = el('li');
       const card = el('button', 'char-card' + (c.rare ? ' rare' : ''));
       card.style.setProperty('--c', c.color);
+      card.style.animationDelay = `${shown++ * 45}ms`;
       const head = el('div', 'char-head');
-      head.append(el('span', 'char-title', c.title), el('span', 'char-name', c.name));
-      if (c.rare) head.append(el('span', 'rare-badge', 'レア'));
+      const emblem = el('span', 'char-emblem', c.name.slice(0, 1));
+      emblem.setAttribute('aria-hidden', 'true');
+      const nameBox = el('div', 'char-namebox');
+      nameBox.append(el('span', 'char-title', c.title), el('span', 'char-name', c.name));
+      head.append(emblem, nameBox);
+      if (c.rare) head.append(el('span', 'rare-badge', '★レア'));
       const trait = el('div', 'char-trait');
       trait.append(el('span', 'trait-name', c.trait.name), el('span', 'trait-text', c.trait.text));
       card.append(head, this.statRow(c.id, true), trait);
