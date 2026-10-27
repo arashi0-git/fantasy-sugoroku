@@ -8,6 +8,7 @@ import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
 import { View, ViewExtras } from './ui/view';
 import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
 import { applyGameResult, loadProfile, Profile, saveProfile } from './meta/profile';
+import { drawGacha, seededRand } from './meta/gacha';
 
 /** あなたのプロフィール（コイン・所持キャラ・経験値）。対戦が終わるたびに更新して保存する */
 let profile: Profile = loadProfile();
@@ -264,9 +265,38 @@ soundBtn?.addEventListener('click', () => {
 });
 syncSoundBtn();
 
+/** タイトル画面（コイン・称号・装備テーマを反映し、ガチャとコレクションへの導線を出す） */
+function showTitleScreen() {
+  view.showTitle(document.getElementById('title')!, start, profile, { onGacha: openGacha, onCollection: openCollection });
+}
+
+function openGacha() {
+  view.showGacha(document.getElementById('select')!, profile, {
+    draw: (count) => {
+      const out = drawGacha(profile, count, seededRand(Date.now()));
+      if (!out) return null;
+      profile = out.profile;
+      saveProfile(profile);
+      return out;
+    },
+    back: () => showTitleScreen(),
+  });
+}
+
+function openCollection() {
+  view.showCollection(document.getElementById('select')!, profile, {
+    equip: (kind, id) => {
+      profile = { ...profile, equipped: { ...profile.equipped, [kind]: id } };
+      saveProfile(profile);
+      return profile;
+    },
+    back: () => showTitleScreen(),
+  });
+}
+
 /** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
 function boot() {
-  view.showTitle(document.getElementById('title')!, start, profile);
+  showTitleScreen();
 }
 
 boot();

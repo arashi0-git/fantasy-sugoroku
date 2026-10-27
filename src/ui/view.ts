@@ -5,7 +5,9 @@ import { CardId, CARDS } from '../data/cards';
 import { CHARACTER_LIST, CHARACTERS, CharacterId, STAT_NAMES, STAT_ORDER, STAT_TEXT } from '../data/characters';
 import { CONFIG, LEVEL, LEVEL_NAMES } from '../data/config';
 import { MISSIONS } from '../data/missions';
-import { GameReward, levelOf, ownsChar, Profile } from '../meta/profile';
+import { GameReward, levelOf, ownsChar, Profile, unownedChars, xpProgress } from '../meta/profile';
+import { COSMETIC_KIND_NAMES, COSMETIC_LIST, CosmeticKind, cosmeticById } from '../meta/cosmetics';
+import { GachaResult, isRareResult, PITY_LIMIT } from '../meta/gacha';
 import {
   Action,
   actorOf,
@@ -82,6 +84,18 @@ export interface ViewHandlers {
   tradeOffer(offer: { to: number; want: number; give: number[]; money: number }): void;
   tradeAnswer(accept: boolean): void;
   restart(): void;
+}
+
+export interface GachaHandlers {
+  /** ガチャを引く。コインが足りなければ null */
+  draw(count: 1 | 10): { profile: Profile; results: GachaResult[] } | null;
+  back(): void;
+}
+
+export interface CollectionHandlers {
+  /** 見た目アイテムを装備する（id が null なら外す）。装備後のプロフィールを返す */
+  equip(kind: CosmeticKind, id: string | null): Profile;
+  back(): void;
 }
 
 export interface ViewExtras {
@@ -381,7 +395,8 @@ export class View {
         ...s.players
           .filter((p) => !p.bankrupt && x.shownPositions[p.id] === i)
           .map((p) => {
-            const t = el('span', 'token' + (p.id === s.current ? ' active' : ''));
+            const skin = p.id === x.human ? x.profile?.equipped.pawn : null;
+            const t = el('span', 'token' + (p.id === s.current ? ' active' : '') + (skin ? ` ${skin}` : ''));
             t.style.setProperty('--c', p.color);
             t.innerHTML = PAWN_SVG;
             t.title = p.name;
@@ -1596,7 +1611,11 @@ export class View {
         if (pos >= 0) name.append(el('span', 'seat', `${pos + 1}番手`));
         name.append(p.name);
         if (p.id !== x.human) name.append(el('span', 'cpu-tag', x.labels[p.id] ? `CPU・${x.labels[p.id]}` : 'CPU'));
-        else name.append(el('span', 'cpu-tag you', 'あなた'));
+        else {
+          name.append(el('span', 'cpu-tag you', 'あなた'));
+          const myTitle = x.profile?.equipped.title ? cosmeticById(x.profile.equipped.title) : undefined;
+          if (myTitle) name.append(el('span', 'title-tag', `称号「${myTitle.name}」`));
+        }
         row.append(name, el('span', 'money', p.bankrupt ? '破産' : fmt(p.money)));
         li.append(row);
         if (p.character) {
@@ -1664,9 +1683,13 @@ export class View {
   }
 
   /** 起動直後のタイトル画面。「はじめる」でキャラ選びへ進む */
-  showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null) {
+  showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null, nav?: { onGacha: () => void; onCollection: () => void }) {
     host.replaceChildren();
     host.hidden = false;
+    // 装備中のタイトルテーマを反映（テーマは2種とも専用クラス）
+    host.classList.remove('theme-sunset', 'theme-night');
+    const theme = profile?.equipped.theme;
+    if (theme === 'theme-sunset' || theme === 'theme-night') host.classList.add(theme);
     const wrap = el('div', 'title-wrap');
     wrap.append(el('p', 'title-kicker', 'すごろく型・資産ゲーム'));
     const logo = el('h1', 'title-logo');
@@ -1674,6 +1697,8 @@ export class View {
     wrap.append(logo);
     wrap.append(el('p', 'title-tagline', '土地を買って、建てて、独占を狙え。'));
     if (profile) wrap.append(el('p', 'title-coins', `🪙 スターコイン ${profile.coins.toLocaleString('ja-JP')}`));
+    const myTitle = profile?.equipped.title ? cosmeticById(profile.equipped.title) : undefined;
+    if (myTitle) wrap.append(el('p', 'title-honor', `称号「${myTitle.name}」`));
     const icons = el('p', 'title-icons');
     icons.append(el('span', '', '🎲'), el('span', '', '🏰'), el('span', '', '🪙'));
     wrap.append(icons);
@@ -1683,6 +1708,21 @@ export class View {
       onStart();
     });
     wrap.append(startBtn);
+    if (nav) {
+      const navRow = el('div', 'title-nav');
+      const gachaBtn = el('button', 'title-sub', '🎰 ガチャ');
+      gachaBtn.addEventListener('click', () => {
+        host.hidden = true;
+        nav.onGacha();
+      });
+      const colBtn = el('button', 'title-sub', '📖 コレクション');
+      colBtn.addEventListener('click', () => {
+        host.hidden = true;
+        nav.onCollection();
+      });
+      navRow.append(gachaBtn, colBtn);
+      wrap.append(navRow);
+    }
     const howBtn = el('button', 'title-how', 'あそびかた');
     const how = el('div', 'title-rules');
     how.hidden = true;
@@ -1721,7 +1761,8 @@ export class View {
     for (const c of CHARACTER_LIST) {
       const li = el('li');
       const owned = !profile || ownsChar(profile, c.id);
-      const card = el('button', 'char-card' + (c.rare ? ' rare' : '') + (owned ? '' : ' locked'));
+      const frame = profile?.equipped.frame;
+      const card = el('button', 'char-card' + (c.rare ? ' rare' : '') + (owned ? '' : ' locked') + (frame ? ` ${frame}` : ''));
       card.style.setProperty('--c', c.color);
       card.style.animationDelay = `${shown++ * 45}ms`;
       const head = el('div', 'char-head');
@@ -1756,6 +1797,176 @@ export class View {
     wrap.append(rareHead, rareGrid);
     host.append(wrap);
     queueMicrotask(() => (grid.querySelector('button:not(:disabled)') as HTMLButtonElement | null)?.focus());
+  }
+
+  /** ガチャ画面。回す→光る→結果、の短い演出つき */
+  showGacha(host: HTMLElement, profile: Profile, h: GachaHandlers) {
+    host.replaceChildren();
+    host.hidden = false;
+    let current = profile;
+    let rolling = false;
+    const wrap = el('div', 'select-wrap gacha-wrap');
+    host.append(wrap);
+
+    const resultCard = (r: GachaResult, i: number): HTMLElement => {
+      const card = el('div', 'gacha-card' + (isRareResult(r) ? ' rare' : '') + (r.kind === 'newChar' ? ' new' : ''));
+      card.style.animationDelay = `${i * 90}ms`;
+      if (r.kind === 'newChar' || r.kind === 'limitBreak') {
+        const c = CHARACTERS[r.charId];
+        const emblem = el('span', 'char-emblem', c.name.slice(0, 1));
+        emblem.style.setProperty('--c', c.color);
+        emblem.style.background = c.color;
+        card.append(emblem, el('p', 'gacha-name', `${c.title} ${c.name}`));
+        if (r.kind === 'newChar') card.append(el('span', 'gacha-badge new', 'NEW!'));
+        else card.append(el('span', 'gacha-badge', `限界突破 ★${current.limitBreak[r.charId] ?? 0}`));
+        if (c.rare) card.append(el('span', 'gacha-badge rare', '★レア'));
+      } else if (r.kind === 'cosmetic') {
+        const item = cosmeticById(r.cosmeticId)!;
+        const icon = { frame: '🖼️', title: '🎖️', pawn: '♟️', theme: '🌆' }[item.kind];
+        card.append(el('span', 'gacha-icon', icon), el('p', 'gacha-name', item.name));
+        card.append(el('span', 'gacha-badge new', 'NEW!'));
+        if (item.rare) card.append(el('span', 'gacha-badge rare', '★レア'));
+      } else {
+        card.append(el('span', 'gacha-icon', '🪙'), el('p', 'gacha-name', `スターコイン +${r.amount}`));
+      }
+      return card;
+    };
+
+    const render = (results: GachaResult[] | null) => {
+      wrap.replaceChildren();
+      wrap.append(el('h1', 'select-title', 'ガチャ'));
+      wrap.append(
+        el('p', 'select-lead', 'スターコインで引く、キャラと見た目アイテムのガチャ。所持済みのキャラは限界突破に、行き先のない景品はコインになります。'),
+      );
+      const status = el('p', 'gacha-status', `🪙 スターコイン ${current.coins.toLocaleString('ja-JP')}`);
+      const missing = unownedChars(current).length;
+      status.append(
+        missing > 0
+          ? el('span', '', `　未所持キャラ あと${missing}人 ／ 天井（未所持キャラ確定）まで あと${PITY_LIMIT - current.pity}回`)
+          : el('span', '', '　全キャラ解放済み！'),
+      );
+      wrap.append(status);
+      if (rolling) {
+        wrap.append(el('div', 'gacha-rolling', '✨'));
+      } else if (results) {
+        const grid = el('div', results.length > 1 ? 'gacha-grid' : 'gacha-grid single');
+        results.forEach((r, i) => grid.append(resultCard(r, i)));
+        wrap.append(grid);
+      }
+      const btns = el('div', 'gacha-btns');
+      const one = el('button', 'title-start', '1回引く（100）');
+      const ten = el('button', 'title-start', '10連引く（1000）');
+      one.disabled = rolling || current.coins < 100;
+      ten.disabled = rolling || current.coins < 1000;
+      const pull = (count: 1 | 10) => {
+        if (rolling) return;
+        const out = h.draw(count);
+        if (!out) return;
+        rolling = true;
+        render(null);
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        window.setTimeout(() => {
+          rolling = false;
+          current = out.profile;
+          render(out.results);
+        }, reduce ? 60 : 1100);
+      };
+      one.addEventListener('click', () => pull(1));
+      ten.addEventListener('click', () => pull(10));
+      btns.append(one, ten);
+      wrap.append(btns);
+      const back = el('button', 'title-how', 'タイトルへもどる');
+      back.addEventListener('click', () => {
+        host.hidden = true;
+        h.back();
+      });
+      wrap.append(back);
+    };
+    render(null);
+  }
+
+  /** コレクション画面。見た目アイテムの装備と、所持キャラのレベル確認ができる */
+  showCollection(host: HTMLElement, profile: Profile, h: CollectionHandlers) {
+    host.replaceChildren();
+    host.hidden = false;
+    let current = profile;
+    const wrap = el('div', 'select-wrap');
+    host.append(wrap);
+
+    const render = () => {
+      wrap.replaceChildren();
+      wrap.append(el('h1', 'select-title', 'コレクション'));
+      wrap.append(el('p', 'select-lead', `🪙 スターコイン ${current.coins.toLocaleString('ja-JP')}　集めた見た目アイテムと、育てたキャラの一覧です。`));
+      for (const kind of ['frame', 'title', 'pawn', 'theme'] as CosmeticKind[]) {
+        wrap.append(el('h2', 'collection-head', COSMETIC_KIND_NAMES[kind]));
+        const list = el('ul', 'collection-list');
+        for (const item of COSMETIC_LIST.filter((c) => c.kind === kind)) {
+          const li = el('li', 'collection-item');
+          const owned = current.ownedCosmetics.includes(item.id);
+          const equipped = current.equipped[kind] === item.id;
+          const nameBox = el('div', 'collection-name');
+          nameBox.append(el('span', 'collection-item-name', item.name));
+          if (item.rare) nameBox.append(el('span', 'rare-badge small', '★レア'));
+          nameBox.append(el('span', 'collection-text', item.text));
+          li.append(nameBox);
+          if (!owned) li.append(el('span', 'collection-locked', '未所持（ガチャで入手）'));
+          else if (equipped) {
+            const off = el('button', 'btn small', '装備中（外す）');
+            off.addEventListener('click', () => {
+              current = h.equip(kind, null);
+              render();
+            });
+            li.append(off);
+          } else {
+            const on = el('button', 'btn small', '装備する');
+            on.addEventListener('click', () => {
+              current = h.equip(kind, item.id);
+              render();
+            });
+            li.append(on);
+          }
+          list.append(li);
+        }
+        wrap.append(list);
+      }
+      wrap.append(el('h2', 'collection-head', 'キャラクター'));
+      const grid = el('ul', 'select-grid');
+      for (const c of CHARACTER_LIST) {
+        const owned = ownsChar(current, c.id);
+        const li = el('li');
+        const card = el('div', 'char-card mini' + (c.rare ? ' rare' : '') + (owned ? '' : ' locked'));
+        card.style.setProperty('--c', c.color);
+        const head = el('div', 'char-head');
+        const emblem = el('span', 'char-emblem', c.name.slice(0, 1));
+        emblem.setAttribute('aria-hidden', 'true');
+        const nameBox = el('div', 'char-namebox');
+        nameBox.append(el('span', 'char-title', c.title), el('span', 'char-name', c.name));
+        head.append(emblem, nameBox);
+        if (c.rare) head.append(el('span', 'rare-badge', '★レア'));
+        card.append(head);
+        if (owned) {
+          const prog = xpProgress(current, c.id);
+          const lb = current.limitBreak[c.id] ?? 0;
+          const line =
+            prog.nextAt === null
+              ? `Lv.${prog.level}（上限）${lb > 0 ? `　限界突破 ★${lb}` : ''}`
+              : `Lv.${prog.level}${lb > 0 ? `　限界突破 ★${lb}` : ''}　経験値 ${prog.xp} / 次のレベルまで ${prog.nextAt}`;
+          card.append(el('p', 'char-progress', line));
+        } else {
+          card.append(el('p', 'char-lock', '🔒 ガチャで解放'));
+        }
+        li.append(card);
+        grid.append(li);
+      }
+      wrap.append(grid);
+      const back = el('button', 'title-how', 'タイトルへもどる');
+      back.addEventListener('click', () => {
+        host.hidden = true;
+        h.back();
+      });
+      wrap.append(back);
+    };
+    render();
   }
 
   private renderLog(s: GameState, x: ViewExtras) {
