@@ -7,8 +7,9 @@ import { PERSONALITIES, Personality } from './ai/personality';
 import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
 import { View, ViewExtras } from './ui/view';
 import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
-import { applyGameResult, loadProfile, Profile, saveProfile } from './meta/profile';
+import { applyGameResult, levelOf, loadProfile, Profile, saveProfile } from './meta/profile';
 import { drawGacha, seededRand } from './meta/gacha';
+import { grownStats } from './meta/growth';
 
 /** あなたのプロフィール（コイン・所持キャラ・経験値）。対戦が終わるたびに更新して保存する */
 let profile: Profile = loadProfile();
@@ -124,6 +125,8 @@ function begin(mine: CharacterId) {
     name: CHARACTERS[id].name,
     color: SEAT_COLORS[i],
     character: id,
+    // 育成の成長が効くのは、あなたのキャラだけ（CPU は素のステータス）
+    ...(i === HUMAN ? { stats: grownStats(id, levelOf(profile, id)) } : {}),
   }));
   SEAT_PERSONALITY = chars.map((id, i) => (i === HUMAN ? null : PERSONALITIES[CHARACTERS[id].personality]));
   generation += 1;
