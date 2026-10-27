@@ -2356,3 +2356,139 @@ button.hand-card:hover:not(:disabled) {
 .order-bar li.done {
   opacity: 0.5;
 }
+
+/* ---------- 3D風チルト表示（盤面を斜め見下ろしに倒す任意モード） ---------- */
+
+.board {
+  transition: transform 0.3s ease;
+}
+body.tilt-on .app {
+  perspective: 1000px;
+}
+body.tilt-on .board {
+  transform: rotateX(33deg) scale(0.96);
+  transform-origin: center 55%;
+  box-shadow: 0 26px 36px rgb(0 0 0 / 0.45);
+}
+/* 揺れ演出もチルトしたまま（通常の shake キーフレームは transform を上書きしてしまうため） */
+body.tilt-on .board.shake {
+  animation-name: board-shake-tilt;
+}
+@keyframes board-shake-tilt {
+  0%,
+  100% {
+    transform: rotateX(33deg) scale(0.96);
+  }
+  15% {
+    transform: rotateX(33deg) scale(0.96) translate(-5px, 2px) rotate(-0.3deg);
+  }
+  35% {
+    transform: rotateX(33deg) scale(0.96) translate(5px, -2px) rotate(0.3deg);
+  }
+  55% {
+    transform: rotateX(33deg) scale(0.96) translate(-4px, -1px);
+  }
+  75% {
+    transform: rotateX(33deg) scale(0.96) translate(3px, 1px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .board {
+    transition: none;
+  }
+}
+
+/* ---------- 縦向きのときの横画面案内 ---------- */
+
+.rotate-hint {
+  display: none;
+}
+@media (max-width: 760px) and (orientation: portrait) {
+  /* タイトル・キャラ選択（z-index 20/30）の下に隠れるので、見えるのは対戦画面だけ */
+  .rotate-hint {
+    position: fixed;
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 5px 3px 11px;
+    border-radius: 999px;
+    background: rgb(16 22 40 / 0.72);
+    color: var(--on-table);
+    font-size: 12px;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgb(0 0 0 / 0.3);
+    pointer-events: none;
+  }
+  .rotate-hint-close {
+    pointer-events: auto;
+    border: 0;
+    background: transparent;
+    color: var(--on-table-soft);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    padding: 4px 6px;
+    cursor: pointer;
+  }
+  body.hint-off .rotate-hint {
+    display: none;
+  }
+}
+
+/* ---------- 横画面（高さの低い landscape）専用レイアウト ---------- */
+
+@media (orientation: landscape) and (max-height: 500px) {
+  :root {
+    --side-w: 280px;
+    /* 盤面の大きさの基準は画面の高さ。ダイス等のサイズ計算にも使う */
+    --board: calc(100dvh - 20px);
+  }
+  .app {
+    grid-template-columns: minmax(0, 1fr) var(--side-w);
+    grid-template-rows: minmax(0, 1fr);
+    height: 100vh;
+    height: 100dvh;
+    align-items: stretch;
+    padding-block: 10px;
+    gap: 12px;
+  }
+  /* 盤面は左カラムいっぱいに広げる（マスは幅÷9が効くので、横向きでは幅が大きく取れる） */
+  .board {
+    width: 100%;
+    height: 100%;
+  }
+  /* 右カラムは列全体をスクロールできるようにする */
+  .side {
+    max-height: none;
+    height: 100%;
+    overflow-y: auto;
+  }
+  /* 小さい横画面でも重なるモバイル用 sticky ドックは、右カラム内では通常フローに戻す */
+  .dock {
+    position: static;
+    box-shadow: none;
+  }
+  .log {
+    min-height: 72px;
+  }
+  /* タイトル画面も横向きで1画面に収まりやすくする */
+  .title-wrap {
+    gap: 7px;
+  }
+  .title-logo {
+    font-size: clamp(38px, 19dvh, 84px);
+  }
+  .title-icons {
+    margin: 0;
+    font-size: 21px;
+  }
+  .title-start {
+    margin-top: 4px;
+    padding: 10px 36px;
+    font-size: 18px;
+  }
+}
