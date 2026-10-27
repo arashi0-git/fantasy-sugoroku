@@ -591,17 +591,220 @@ button:focus-visible {
   padding-left: 6px;
 }
 
+/* 価格・通行料と建物アイコンの行 */
+.tile .meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  margin-top: 1px;
+  max-width: 100%;
+}
+.tile .meta .sub {
+  margin-top: 0;
+  min-width: 0;
+}
 .tile .lv {
   display: flex;
   justify-content: center;
-  margin-top: 2px;
-  min-height: clamp(11px, 27cqi, 23px);
+  flex: none;
+}
+.tile .lv:empty {
+  display: none;
 }
 .tile .lv .building svg {
   display: block;
-  height: clamp(11px, 27cqi, 23px);
+  height: clamp(13px, 30cqi, 26px);
   width: auto;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+
+/* 特殊マスのイラスト */
+.tile .art {
+  display: flex;
+  justify-content: center;
+  margin-top: 1px;
+  min-height: clamp(12px, 30cqi, 26px);
+}
+.tile .art:empty {
+  display: none;
+}
+.tile .art svg {
+  display: block;
+  height: clamp(12px, 30cqi, 26px);
+  width: auto;
+}
+
+/* 観光地は金のフレームで目立たせる（所有地は持ち主色と重ねる） */
+.tile.tourist {
+  box-shadow:
+    inset 0 0 0 2px var(--brass),
+    inset 0 0 0 4.5px rgb(199 154 59 / 0.35);
+}
+.tile.tourist.owned {
+  box-shadow:
+    inset 0 0 0 3px var(--owner),
+    inset 0 0 0 5.5px rgb(199 154 59 / 0.6);
+}
+
+/* ---------- マスの詳細シート ---------- */
+
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(10 14 30 / 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.sheet-overlay[hidden] {
+  display: none;
+}
+.sheet {
+  background: var(--table-deep);
+  color: var(--on-table);
+  width: min(100%, 560px);
+  max-height: 74vh;
+  overflow-y: auto;
+  border-radius: 14px 14px 0 0;
+  padding: 14px 18px calc(16px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -8px 30px rgb(0 0 0 / 0.45);
+  animation: sheet-up 0.18s ease-out;
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(18px);
+    opacity: 0.5;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sheet {
+    animation: none;
+  }
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sheet-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 21px;
+  margin: 0;
+}
+.sheet-close {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1.5px solid var(--on-table-soft);
+  background: transparent;
+  color: var(--on-table);
+  font-size: 15px;
+  line-height: 1;
+}
+.detail-kind {
+  color: var(--brass);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 0.05em;
+  margin: 0 0 8px;
+}
+.detail-desc {
+  font-size: 14px;
+  line-height: 1.75;
+  margin: 0 0 8px;
+}
+.detail-rows {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 10px;
+}
+.detail-rows > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 14px;
+  border-bottom: 1px dashed rgb(255 255 255 / 0.14);
+  padding-bottom: 4px;
+}
+.detail-rows dt {
+  color: var(--on-table-soft);
+  font-size: 13px;
+  flex: none;
+}
+.detail-rows dd {
+  margin: 0;
+  font-weight: 700;
+  text-align: right;
+}
+.detail-owner .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c, transparent);
+  margin-right: 6px;
+}
+.detail-rent {
+  background: rgb(199 154 59 / 0.13);
+  border-radius: 8px;
+  padding: 9px 13px;
+  margin-bottom: 10px;
+}
+.detail-rent .rent-total {
+  margin: 0;
+  font-size: 16px;
+}
+.detail-rent .rent-total strong {
+  font-size: 19px;
+  color: var(--brass);
+}
+.rent-steps {
+  margin: 5px 0 0;
+  padding-left: 19px;
+  font-size: 12.5px;
+  color: var(--on-table-soft);
+  line-height: 1.55;
+}
+.detail-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12.5px;
+}
+.detail-group-label {
+  font-weight: 700;
+  color: var(--on-table-soft);
+}
+.detail-group .sq-chip {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  background: rgb(255 255 255 / 0.07);
+  padding: 2.5px 9px;
+  border-radius: 999px;
+}
+.detail-group .sq-chip.self {
+  box-shadow: inset 0 0 0 1.5px var(--brass);
+}
+.detail-group .sq-chip .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c, transparent);
+}
+.detail-group-note {
+  font-weight: 700;
 }
 
 .gauge-wrap {
@@ -1510,11 +1713,40 @@ button.hand-card:hover:not(:disabled) {
   .tile .sub {
     display: none;
   }
-  /* スマホでも、誰の土地で通行料がいくらかは見えるようにする */
-  .tile.owned .sub {
+  /* スマホでも、土地と観光地は価格・通行料が見えるようにする（所有者は枠の色で判別） */
+  .tile.kind-land .sub,
+  .tile.kind-tourist .sub {
     display: block;
-    font-size: 9px;
+    font-size: 8.5px;
     line-height: 1.3;
+    margin-top: 0;
+  }
+  /* 小さいマスに土地名＋イラスト＋価格・建物が収まるよう詰める */
+  .tile .name {
+    line-height: 1.15;
+  }
+  .tile .art {
+    min-height: 11px;
+  }
+  .tile .art svg {
+    height: 11px;
+  }
+  /* 建物アイコンは右上に置き、金額はマスの幅いっぱいに表示する */
+  .tile .lv {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+  }
+  .tile .lv .building svg {
+    height: 11px;
+  }
+  .tile.kind-land .sub,
+  .tile.kind-tourist .sub {
+    font-size: clamp(7.5px, 20cqi, 8.5px);
+  }
+  .tile .sub.long {
+    font-size: 6.8px;
+    letter-spacing: -0.03em;
   }
   .title,
   .gauge-wrap .hint {
