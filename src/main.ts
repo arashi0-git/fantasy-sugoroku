@@ -5,7 +5,7 @@ import { decideCpu } from './ai/cpu';
 import { cpuLine } from './ai/speech';
 import { PERSONALITIES, Personality } from './ai/personality';
 import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
-import { View, ViewExtras } from './ui/view';
+import { NavTab, View, ViewExtras } from './ui/view';
 import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
 import { applyGameResult, levelOf, loadProfile, Profile, saveProfile } from './meta/profile';
 import { drawGacha, seededRand } from './meta/gacha';
@@ -100,9 +100,119 @@ const view = new View(
     gamble: (use) => humanAct({ type: 'gamble', use }),
     tradeOffer: (offer) => humanAct({ type: 'offerTrade', ...offer }),
     tradeAnswer: (accept) => humanAct({ type: 'answerTrade', accept }),
-    restart: () => start(),
+    restart: () => goTo('select'),
   },
 );
+
+// ---- 画面遷移とブラウザ履歴の連携 ----
+// 画面は5つ：タイトル（ホーム）／キャラ選択／ガチャ／コレクション／対戦。
+// 遷移はすべて goTo / requestNav を通し、履歴（pushState）と下部タブバーの状態を揃える。
+type AppScreen = 'title' | 'select' | 'gacha' | 'collection' | 'game';
+const SCREEN_NAMES: Record<AppScreen, string> = {
+  title: 'ホーム',
+  select: 'キャラ選択',
+  gacha: 'ガチャ',
+  collection: 'コレクション',
+  game: '対戦',
+};
+let screen: AppScreen = 'title';
+/** 対戦が存在するか（破棄したら false。履歴で「対戦」に戻っても復元はできない） */
+let hasGame = false;
+
+function pushScreen(target: AppScreen) {
+  try {
+    history.pushState({ fsScreen: target }, '');
+  } catch {
+    /* 履歴に積めない環境でも画面遷移自体は続ける */
+  }
+}
+
+function replaceScreen(target: AppScreen) {
+  try {
+    history.replaceState({ fsScreen: target }, '');
+  } catch {
+    /* 同上 */
+  }
+}
+
+/** タブバーの見た目を現在の画面に合わせる */
+function syncNavBar() {
+  const over = screen === 'game' && hasGame && state.phase.kind === 'gameover';
+  view.setNavState({
+    active: screen === 'title' ? 'home' : screen === 'gacha' ? 'gacha' : screen === 'collection' ? 'collection' : null,
+    lockMeta: screen === 'game' && !over,
+  });
+}
+
+/** 実際の画面切り替え。push=true ならブラウザ履歴に積む */
+function goTo(target: AppScreen, push = true) {
+  screen = target;
+  if (push) pushScreen(target);
+  const titleEl = document.getElementById('title')!;
+  const selectEl = document.getElementById('select')!;
+  if (target === 'title') {
+    selectEl.hidden = true;
+    showTitleScreen();
+  } else if (target === 'gacha') {
+    titleEl.hidden = true;
+    openGacha();
+  } else if (target === 'collection') {
+    titleEl.hidden = true;
+    openCollection();
+  } else if (target === 'select') {
+    titleEl.hidden = true;
+    start();
+  } else {
+    // 対戦画面は .app そのもの。両方のオーバーレイを閉じて盤面を見せる
+    titleEl.hidden = true;
+    selectEl.hidden = true;
+  }
+  syncNavBar();
+}
+
+/** 対戦を破棄する（CPU の処理ループを止め、対戦が存在しない状態にする） */
+function leaveGame() {
+  generation += 1;
+  hasGame = false;
+}
+
+/**
+ * 遷移のリクエスト。対戦の途中から別の画面へ行くときは確認ダイアログを挟む。
+ * fromPop=true はブラウザの戻る／進む経由：キャンセルされたら履歴を対戦に戻して帳尻を合わせる。
+ */
+async function requestNav(target: AppScreen, push = true, fromPop = false) {
+  if (target === screen) return;
+  if (target === 'game' && !hasGame) {
+    // 破棄済みの対戦には戻れない。履歴の指す先をタイトルに置き換えてホームへ
+    replaceScreen('title');
+    goTo('title', false);
+    return;
+  }
+  if (screen === 'game' && hasGame && state.phase.kind !== 'gameover') {
+    const ok = await view.confirmDialog(
+      `対戦の途中です。対戦をやめて、${SCREEN_NAMES[target]}へ移動しますか？`,
+      '対戦をやめて移動する',
+    );
+    if (!ok) {
+      if (fromPop) pushScreen('game');
+      return;
+    }
+    leaveGame();
+  }
+  goTo(target, push);
+}
+
+// ブラウザの戻る／進む：履歴に積んだ画面へ、履歴を増やさずに戻る
+window.addEventListener('popstate', (e) => {
+  const target = (e.state as { fsScreen?: AppScreen } | null)?.fsScreen;
+  if (!target || target === screen) return;
+  void requestNav(target, false, true);
+});
+
+// 下部タブバーからの遷移
+view.setNavHandler((tab: NavTab) => {
+  void requestNav(tab === 'home' ? 'title' : tab);
+});
 
 /** キャラ選びの画面を出し、選んだらゲームを始める */
 function start() {
@@ -131,6 +241,9 @@ function begin(mine: CharacterId) {
   SEAT_PERSONALITY = chars.map((id, i) => (i === HUMAN ? null : PERSONALITIES[CHARACTERS[id].personality]));
   generation += 1;
   state = createGame(setup);
+  screen = 'game';
+  hasGame = true;
+  pushScreen('game');
   extras = {
     shownPositions: state.players.map((p) => p.position),
     dice: null,
@@ -144,6 +257,7 @@ function begin(mine: CharacterId) {
     reward: null,
   };
   view.render(state, extras);
+  syncNavBar();
   void runCpu();
 }
 
@@ -233,6 +347,7 @@ async function act(action: Action) {
   extras.shownPositions = state.players.map((p) => p.position);
   view.render(state, extras);
   settleReward();
+  syncNavBar();
 }
 
 /** 対戦が終わっていたら、報酬（コイン・経験値）を1回だけ確定して保存する */
@@ -268,9 +383,9 @@ soundBtn?.addEventListener('click', () => {
 });
 syncSoundBtn();
 
-/** タイトル画面（コイン・称号・装備テーマを反映し、ガチャとコレクションへの導線を出す） */
+/** タイトル画面（コイン・称号・装備テーマを反映。ガチャ・コレクションへの導線は下部タブバー） */
 function showTitleScreen() {
-  view.showTitle(document.getElementById('title')!, start, profile, { onGacha: openGacha, onCollection: openCollection });
+  view.showTitle(document.getElementById('title')!, () => goTo('select'), profile);
 }
 
 function openGacha() {
@@ -282,7 +397,7 @@ function openGacha() {
       saveProfile(profile);
       return out;
     },
-    back: () => showTitleScreen(),
+    back: () => goTo('title'),
   });
 }
 
@@ -293,13 +408,15 @@ function openCollection() {
       saveProfile(profile);
       return profile;
     },
-    back: () => showTitleScreen(),
+    back: () => goTo('title'),
   });
 }
 
 /** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
 function boot() {
+  replaceScreen('title');
   showTitleScreen();
+  syncNavBar();
 }
 
 boot();

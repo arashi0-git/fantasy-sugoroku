@@ -2531,3 +2531,141 @@ body.cam-on .board.shake {
     font-size: 18px;
   }
 }
+
+/* ---------- 下部タブバー（全画面共通の導線） ---------- */
+
+:root {
+  --tabbar-h: 54px;
+}
+
+/* 対戦画面の末尾がタブバーに隠れないよう、ページ全体に下の余白を確保する */
+body {
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+}
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  background: rgb(27 37 60 / 0.97);
+  border-top: 1px solid rgb(199 154 59 / 0.45);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-shadow: 0 -4px 16px rgb(0 0 0 / 0.3);
+}
+.tab-btn {
+  flex: 1 1 0;
+  max-width: 220px;
+  height: var(--tabbar-h);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  background: none;
+  border: 0;
+  color: var(--on-table-soft);
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+.tab-btn:hover:not(:disabled) {
+  color: var(--on-table);
+}
+.tab-btn.active {
+  color: #f3d489;
+}
+.tab-btn.active:hover:not(:disabled) {
+  color: #f3d489;
+}
+.tab-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+.tab-icon {
+  font-size: 20px;
+  line-height: 1.15;
+}
+.tab-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+/* 固定オーバーレイ（タイトル・選択系）の中でも、末尾の内容がタブバーに隠れないようにする */
+.title-screen {
+  padding-bottom: calc(24px + var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+}
+.select {
+  padding-bottom: calc(32px + var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+}
+
+/* ---------- 確認ダイアログ ---------- */
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgb(10 14 30 / 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.confirm-overlay[hidden] {
+  display: none;
+}
+.confirm-box {
+  background: var(--table-deep);
+  color: var(--on-table);
+  width: min(100%, 420px);
+  border-radius: 14px;
+  border: 1px solid rgb(199 154 59 / 0.4);
+  padding: 20px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
+}
+.confirm-msg {
+  margin: 0 0 16px;
+  font-size: 15px;
+}
+.confirm-btns {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.confirm-ok {
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 3px 0 #8e2f29;
+}
+
+/* スマホでは sticky の操作ドックがタブバーの上に貼り付くようにする */
+@media (max-width: 760px) {
+  .dock {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* 横画面ではタブバーを細くし、盤面の高さから差し引いて重ならないようにする */
+@media (orientation: landscape) and (max-height: 500px) {
+  :root {
+    --tabbar-h: 44px;
+  }
+  body {
+    padding-bottom: 0;
+  }
+  .app {
+    height: calc(100dvh - var(--tabbar-h) - env(safe-area-inset-bottom, 0px));
+  }
+  .tab-btn {
+    flex-direction: row;
+    gap: 6px;
+  }
+  .tab-icon {
+    font-size: 17px;
+  }
+  .tab-label {
+    font-size: 12px;
+  }
+}
