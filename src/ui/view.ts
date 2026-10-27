@@ -1252,7 +1252,9 @@ export class View {
     host.hidden = false;
     const wrap = el('div', 'title-wrap');
     wrap.append(el('p', 'title-kicker', 'すごろく型・資産ゲーム'));
-    wrap.append(el('h1', 'title-logo', 'ファンタジーすごろく'));
+    const logo = el('h1', 'title-logo');
+    logo.append(el('span', 'logo-line', 'ファンタジー'), el('span', 'logo-line logo-line-2', 'すごろく'));
+    wrap.append(logo);
     wrap.append(el('p', 'title-tagline', '土地を買って、建てて、独占を狙え。'));
     const icons = el('p', 'title-icons');
     icons.append(el('span', '', '🎲'), el('span', '', '🏰'), el('span', '', '🪙'));
