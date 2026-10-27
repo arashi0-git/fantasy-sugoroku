@@ -247,6 +247,11 @@ export class View {
     private handEl: HTMLElement,
     private h: ViewHandlers,
   ) {
+    // カメラ追尾モードで盤面を拡大・移動してもはみ出さないよう、盤面をビューポート（.board-view）で包む
+    const boardView = el('div', 'board-view');
+    this.boardEl.parentElement?.insertBefore(boardView, this.boardEl);
+    boardView.append(this.boardEl);
+    this.initCameraDrag();
     // 盤面の大きさが変わったら、パネルの置き場所を決め直して描き直す
     new ResizeObserver(() => {
       const compact = this.boardEl.clientWidth < View.COMPACT_BOARD;
@@ -293,37 +298,170 @@ export class View {
     requestAnimationFrame(this.tickGauge);
   }
 
-  /** 盤面を斜め見下ろしにする「3D風」表示の切り替えボタン（速度バーの隣に作る） */
+  /** 盤面の見え方の切り替えボタン（速度バーの隣に作る）。「3D風」チルトと「カメラ」追尾は併用せず、どちらか一方だけが有効 */
   private buildTiltToggle() {
     const speedbar = document.getElementById('speedbar');
     if (!speedbar?.parentElement) return;
     const bar = el('div', 'speed-bar tilt-bar');
     bar.setAttribute('role', 'group');
     bar.setAttribute('aria-label', '盤面の見え方');
-    const btn = el('button', 'tilt-btn', '3D風');
-    btn.type = 'button';
+    const tiltBtn = el('button', 'tilt-btn', '3D風');
+    tiltBtn.type = 'button';
+    const camBtn = el('button', 'tilt-btn', 'カメラ');
+    camBtn.type = 'button';
+    camBtn.title = 'カメラ追尾：手番の人のコマを中心に、盤面を拡大して追いかけます';
     const sync = () => {
-      const on = document.body.classList.contains('tilt-on');
-      btn.classList.toggle('active', on);
-      btn.setAttribute('aria-pressed', String(on));
+      const tilt = document.body.classList.contains('tilt-on');
+      tiltBtn.classList.toggle('active', tilt);
+      tiltBtn.setAttribute('aria-pressed', String(tilt));
+      camBtn.classList.toggle('active', this.cameraOn);
+      camBtn.setAttribute('aria-pressed', String(this.cameraOn));
     };
-    try {
-      if (window.localStorage.getItem('fs-tilt') === '1') document.body.classList.add('tilt-on');
-    } catch {
-      /* 保存できない環境では初期値オフのまま */
-    }
-    btn.addEventListener('click', () => {
-      const on = document.body.classList.toggle('tilt-on');
+    this.syncViewBar = sync;
+    const setTilt = (on: boolean) => {
+      document.body.classList.toggle('tilt-on', on);
       try {
         window.localStorage.setItem('fs-tilt', on ? '1' : '0');
       } catch {
         /* 保存できなくても切り替え自体は有効 */
       }
+    };
+    try {
+      // 両方とも保存されていたら、カメラを優先する（併用はしない仕様）
+      if (window.localStorage.getItem('fs-cam') === '1') this.setCamera(true);
+      else if (window.localStorage.getItem('fs-tilt') === '1') document.body.classList.add('tilt-on');
+    } catch {
+      /* 保存できない環境では初期値オフのまま */
+    }
+    tiltBtn.addEventListener('click', () => {
+      const on = !document.body.classList.contains('tilt-on');
+      if (on && this.cameraOn) this.setCamera(false);
+      setTilt(on);
       sync();
     });
-    bar.append(el('span', 'speed-label', '見え方'), btn);
+    camBtn.addEventListener('click', () => {
+      const on = !this.cameraOn;
+      if (on) setTilt(false);
+      this.setCamera(on);
+      sync();
+    });
+    bar.append(el('span', 'speed-label', '見え方'), tiltBtn, camBtn);
     speedbar.after(bar);
     sync();
+  }
+
+  // ---- カメラ追尾モード ----
+  /** カメラの拡大倍率（全体表示の約2倍のマスになる） */
+  private static readonly CAMERA_SCALE = 2;
+  private cameraOn = false;
+  /** 見え方バーの見た目を現在の状態に合わせる（buildTiltToggle が設定する） */
+  private syncViewBar: (() => void) | null = null;
+  /** カメラがいま中央に置いているマス（変わったら自由視点のずれをリセットする） */
+  private camSquare = -1;
+  /** ドラッグでずらした自由視点のずれ（px）。次のコマ移動で自動的に追尾へ戻る */
+  private camFree = { x: 0, y: 0 };
+  private camDragStart: { x: number; y: number; fx: number; fy: number } | null = null;
+  private camDragged = false;
+  /** ドラッグ直後のクリックを、マスのタップとして扱わないための印 */
+  private camSuppressClick = false;
+
+  /** カメラ追尾のオン／オフ。オンにするとチルトは外れる（併用しない）。盤面の transform はカメラが管理する */
+  private setCamera(on: boolean) {
+    this.cameraOn = on;
+    document.body.classList.toggle('cam-on', on);
+    try {
+      window.localStorage.setItem('fs-cam', on ? '1' : '0');
+    } catch {
+      /* 保存できなくても切り替え自体は有効 */
+    }
+    if (on) {
+      if (document.body.classList.contains('tilt-on')) {
+        document.body.classList.remove('tilt-on');
+        try {
+          window.localStorage.setItem('fs-tilt', '0');
+        } catch {
+          /* 保存できなくても切り替え自体は有効 */
+        }
+      }
+      this.camSquare = -1;
+      this.camFree = { x: 0, y: 0 };
+    } else {
+      this.boardEl.style.transform = '';
+      this.boardEl.style.transformOrigin = '';
+    }
+    // パネルの置き場所（中央か横の列か）がカメラの有無で変わるので、描き直して追いつかせる
+    if (this.last) this.render(...this.last);
+    this.syncViewBar?.();
+  }
+
+  /**
+   * カメラの transform を、手番の人のコマがビューポート中央に来るよう設定する。
+   * 端ではクランプして、拡大した盤面がビューポートからはみ出して余白にならないようにする。
+   */
+  private applyCamera(s: GameState, x: ViewExtras) {
+    const target = x.shownPositions[s.current];
+    if (target === undefined) return;
+    const tile = this.tiles[target];
+    const W = this.boardEl.clientWidth;
+    const H = this.boardEl.clientHeight;
+    if (!tile || !W || !H) return;
+    // 追うコマが変わったら、自由視点のずれは捨てて追尾に戻る
+    if (target !== this.camSquare) {
+      this.camSquare = target;
+      this.camFree = { x: 0, y: 0 };
+    }
+    const S = View.CAMERA_SCALE;
+    const cx = tile.offsetLeft + tile.offsetWidth / 2;
+    const cy = tile.offsetTop + tile.offsetHeight / 2;
+    const baseX = W / 2 - S * cx;
+    const baseY = H / 2 - S * cy;
+    const dx = Math.min(0, Math.max(W * (1 - S), baseX + this.camFree.x));
+    const dy = Math.min(0, Math.max(H * (1 - S), baseY + this.camFree.y));
+    // クランプで削られた分は自由視点のずれから引いておく（端で引っかからずに戻ってこられるように）
+    this.camFree = { x: dx - baseX, y: dy - baseY };
+    this.boardEl.style.transformOrigin = '0 0';
+    this.boardEl.style.transform = `translate(${dx}px, ${dy}px) scale(${S})`;
+  }
+
+  /** カメラモード中のドラッグ自由視点。動かしたあとのクリックはマスのタップにしない */
+  private initCameraDrag() {
+    this.boardEl.addEventListener('pointerdown', (e) => {
+      if (!this.cameraOn || e.button !== 0) return;
+      this.camDragStart = { x: e.clientX, y: e.clientY, fx: this.camFree.x, fy: this.camFree.y };
+      this.camDragged = false;
+    });
+    window.addEventListener('pointermove', (e) => {
+      const start = this.camDragStart;
+      if (!start || !this.cameraOn) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (!this.camDragged && Math.abs(dx) + Math.abs(dy) < 6) return;
+      this.camDragged = true;
+      document.body.classList.add('cam-drag');
+      this.camFree = { x: start.fx + dx, y: start.fy + dy };
+      if (this.last) this.applyCamera(this.last[0], this.last[1]);
+    });
+    window.addEventListener('pointerup', () => {
+      if (this.camDragStart && this.camDragged) this.camSuppressClick = true;
+      this.camDragStart = null;
+      this.camDragged = false;
+      document.body.classList.remove('cam-drag');
+    });
+    // ドラッグの締めのクリックがタイルに届く前に止める（キャプチャ段階）
+    this.boardEl.addEventListener(
+      'click',
+      (e) => {
+        if (this.camSuppressClick) {
+          this.camSuppressClick = false;
+          e.stopPropagation();
+          e.preventDefault();
+        }
+      },
+      true,
+    );
+    window.addEventListener('resize', () => {
+      if (this.cameraOn && this.last) this.applyCamera(this.last[0], this.last[1]);
+    });
   }
 
   /** 縦向きのスマホで対戦画面を開いている間だけ出す「横画面が見やすいよ」の小さな案内 */
@@ -441,6 +579,8 @@ export class View {
     this.renderPlayers(s, x);
     this.renderLog(s, x);
     if (this.detailSquare !== null) this.refreshDetail(s);
+    // カメラモードでは、手番の人のコマに盤面を追従させる（コマの移動アニメーションのたびに呼ばれる）
+    if (this.cameraOn) this.applyCamera(s, x);
   }
 
   /** 手札のカードを使う。対象が必要なカードは、対象選びの画面にする */
@@ -749,9 +889,10 @@ export class View {
     const c = this.centerEl;
     c.replaceChildren();
     this.dockEl.replaceChildren();
-    // お知らせと操作パネルの置き場所：盤面が大きければ中央、小さければ横の列（スマホでは盤面の下）
+    // お知らせと操作パネルの置き場所：盤面が大きければ中央、小さければ横の列（スマホでは盤面の下）。
+    // カメラモードでは盤面の中央が画角の外に出ることがあるので、常に横の列に出す
     this.compact = this.boardEl.clientWidth < View.COMPACT_BOARD;
-    const host = this.compact ? this.dockEl : c;
+    const host = this.compact || this.cameraOn ? this.dockEl : c;
     c.append(el('h1', 'title', 'ファンタジーすごろく'));
     c.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
@@ -775,9 +916,10 @@ export class View {
 
     c.append(this.dice(x));
 
-    // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）
+    // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）。
+    // カメラモードでは盤面の中央が見えないことがあるので、出来事の帯も横の列に出す
     const banner = this.eventBanner(s, x);
-    if (banner) c.append(banner);
+    if (banner) (this.cameraOn ? host : c).append(banner);
 
     // CPU の一言（演出中も出す）
     // カードの結果が同じ人のものなら、吹き出しの下にまとめて場所を節約する
