@@ -1,12 +1,16 @@
 import './ui/style.css';
 import { BOARD_SIZE } from './data/board';
-import { Action, actorOf, applyAction, createGame, GameError, GameState } from './core/game';
+import { Action, actorOf, applyAction, createGame, GameError, GameState, rankByAssets } from './core/game';
 import { decideCpu } from './ai/cpu';
 import { cpuLine } from './ai/speech';
 import { PERSONALITIES, Personality } from './ai/personality';
 import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
 import { View, ViewExtras } from './ui/view';
 import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
+import { applyGameResult, loadProfile, Profile, saveProfile } from './meta/profile';
+
+/** あなたのプロフィール（コイン・所持キャラ・経験値）。対戦が終わるたびに更新して保存する */
+let profile: Profile = loadProfile();
 
 // あなたの席（順番）はゲームごとにランダム。あなただけ人間が操作し、残りの3人はCPUが動かす
 let HUMAN = 0;
@@ -101,7 +105,7 @@ const view = new View(
 /** キャラ選びの画面を出し、選んだらゲームを始める */
 function start() {
   generation += 1;
-  view.showCharacterSelect(document.getElementById('select')!, begin);
+  view.showCharacterSelect(document.getElementById('select')!, begin, profile);
 }
 
 function begin(mine: CharacterId) {
@@ -132,6 +136,8 @@ function begin(mine: CharacterId) {
     labels: SEAT_PERSONALITY.map(() => null),
     speech: null,
     sayLog: [],
+    profile,
+    reward: null,
   };
   view.render(state, extras);
   void runCpu();
@@ -222,6 +228,27 @@ async function act(action: Action) {
   state = next;
   extras.shownPositions = state.players.map((p) => p.position);
   view.render(state, extras);
+  settleReward();
+}
+
+/** 対戦が終わっていたら、報酬（コイン・経験値）を1回だけ確定して保存する */
+let rewardedState: GameState | null = null;
+function settleReward() {
+  if (state.phase.kind !== 'gameover' || rewardedState === state) return;
+  rewardedState = state;
+  const me = state.players[HUMAN];
+  if (!me.character) return;
+  const rank = me.bankrupt ? 4 : rankByAssets(state).indexOf(HUMAN) + 1;
+  const { profile: next, reward } = applyGameResult(profile, me.character, {
+    rank,
+    won: state.phase.winner === HUMAN,
+    reason: state.phase.reason,
+  });
+  profile = next;
+  saveProfile(profile);
+  extras.profile = profile;
+  extras.reward = { ...reward, charName: CHARACTERS[me.character].name, rank };
+  view.render(state, extras);
 }
 
 /** 効果音のオン／オフボタン */
@@ -239,7 +266,7 @@ syncSoundBtn();
 
 /** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
 function boot() {
-  view.showTitle(document.getElementById('title')!, start);
+  view.showTitle(document.getElementById('title')!, start, profile);
 }
 
 boot();

@@ -797,6 +797,13 @@ button:focus-visible {
   color: var(--on-table);
   font-size: clamp(15px, 2.6vw, 19px);
 }
+.title-coins {
+  margin: 0;
+  font-weight: 700;
+  font-size: clamp(15px, 2.6vw, 18px);
+  color: #f3d489;
+  letter-spacing: 0.04em;
+}
 .title-icons {
   margin: 6px 0 2px;
   display: flex;
@@ -1706,6 +1713,49 @@ button.hand-card:hover:not(:disabled) {
 }
 .mission-reveal li.done .mr-res {
   color: #9fb6e6;
+}
+
+/* ---------- 対戦の報酬・キャラのロックとレベル ---------- */
+
+.reward-box {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(216, 178, 94, 0.55);
+  border-radius: 10px;
+  background: rgba(216, 178, 94, 0.12);
+  text-align: left;
+}
+.reward-box h4 {
+  color: #f3d489;
+}
+.reward-line {
+  margin: 2px 0;
+  font-size: 14px;
+}
+.char-card.locked {
+  opacity: 0.55;
+  filter: grayscale(0.7);
+  cursor: not-allowed;
+}
+.char-card.locked:hover {
+  transform: none;
+  filter: grayscale(0.7);
+}
+.char-lock {
+  margin: 6px 0 0;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--on-table);
+}
+.char-level {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: #f3d489;
+  border: 1px solid rgba(216, 178, 94, 0.6);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
 }
 
 /* ---------- レアキャラ ---------- */
