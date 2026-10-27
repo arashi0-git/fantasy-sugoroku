@@ -27,6 +27,8 @@ export interface Player {
   hand: CardId[];
   /** キャラクター（なければステータスは標準・特性なし） */
   character: CharacterId | null;
+  /** 育成で成長したステータス（あれば基礎ステータスの代わりに使う。人間のキャラだけに渡す） */
+  statsOverride: Record<StatId, number> | null;
   /** 天翔をもう使ったか（決まった周回数だけ始まりの門を通過すると戻る） */
   skyUsed: boolean;
   /** 天翔を使ってから通過した始まりの門の数 */
@@ -238,6 +240,8 @@ export interface PlayerSetup {
   name: string;
   color: string;
   character?: CharacterId;
+  /** 育成で成長したステータス（人間のキャラだけに渡す想定。core は誰のものか区別しない） */
+  stats?: Record<StatId, number>;
 }
 
 // ---------- キャラクター ----------
@@ -245,7 +249,8 @@ export interface PlayerSetup {
 /** ステータスの補正（標準3との差 × 1段階の補正）。キャラがなければ 0 */
 export function statMod(p: Player, stat: StatId): number {
   if (!p.character) return 0;
-  return (CHARACTERS[p.character].stats[stat] - 3) * CONFIG.statStep[stat];
+  const stats = p.statsOverride ?? CHARACTERS[p.character].stats;
+  return (stats[stat] - 3) * CONFIG.statStep[stat];
 }
 
 export function hasTrait(p: Player, trait: TraitId): boolean {
@@ -285,6 +290,7 @@ export function createGame(players: PlayerSetup[], seed = Date.now()): GameState
       travelPending: false,
       hand: [],
       character: p.character ?? null,
+      statsOverride: p.stats ?? null,
       skyUsed: false,
       skyLaps: 0,
       mission: null,

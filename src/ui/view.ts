@@ -2,12 +2,13 @@
 
 import { BOARD, GROUPS, Square, SquareKind } from '../data/board';
 import { CardId, CARDS } from '../data/cards';
-import { CHARACTER_LIST, CHARACTERS, CharacterId, STAT_NAMES, STAT_ORDER, STAT_TEXT } from '../data/characters';
+import { CHARACTER_LIST, CHARACTERS, CharacterId, StatId, STAT_NAMES, STAT_ORDER, STAT_TEXT } from '../data/characters';
 import { CONFIG, LEVEL, LEVEL_NAMES } from '../data/config';
 import { MISSIONS } from '../data/missions';
 import { GameReward, levelOf, ownsChar, Profile, unownedChars, xpProgress } from '../meta/profile';
 import { COSMETIC_KIND_NAMES, COSMETIC_LIST, CosmeticKind, cosmeticById } from '../meta/cosmetics';
 import { GachaResult, isRareResult, PITY_LIMIT } from '../meta/gacha';
+import { grownStats } from '../meta/growth';
 import {
   Action,
   actorOf,
@@ -1625,7 +1626,7 @@ export class View {
           if (c.rare) trait.append(el('span', 'rare-badge small', 'レア'));
           trait.append(` ${c.trait.text}`);
           li.append(trait);
-          li.append(this.statRow(p.character));
+          li.append(this.statRow(p.character, false, p.statsOverride ?? undefined));
         }
         if (!p.bankrupt) {
           const lands = ownedSquares(s, p.id).length;
@@ -1667,15 +1668,16 @@ export class View {
     );
   }
 
-  /** ステータスの小さな表示（収入●●●○○ …） */
-  private statRow(id: CharacterId, big = false): HTMLElement {
+  /** ステータスの小さな表示（収入●●●○○ …）。stats を渡すと育成後の値で出す */
+  private statRow(id: CharacterId, big = false, stats?: Record<StatId, number>): HTMLElement {
     const row = el('dl', big ? 'stats big' : 'stats');
     for (const st of STAT_ORDER) {
-      const v = CHARACTERS[id].stats[st];
+      const v = (stats ?? CHARACTERS[id].stats)[st];
       const item = el('div', `stat ${v > 3 ? 'up' : v < 3 ? 'down' : ''}`);
       item.title = `${STAT_NAMES[st]} ${v}：${STAT_TEXT[st]}`;
       const pips = el('dd', 'pips');
-      for (let i = 1; i <= 5; i++) pips.append(el('span', i <= v ? 'on' : ''));
+      const pipsMax = Math.max(5, v);
+      for (let i = 1; i <= pipsMax; i++) pips.append(el('span', i <= v ? 'on' : ''));
       item.append(el('dt', '', STAT_NAMES[st]), pips);
       row.append(item);
     }
@@ -1778,7 +1780,7 @@ export class View {
       }
       const trait = el('div', 'char-trait');
       trait.append(el('span', 'trait-name', c.trait.name), el('span', 'trait-text', c.trait.text));
-      card.append(head, this.statRow(c.id, true), trait);
+      card.append(head, this.statRow(c.id, true, profile && owned ? grownStats(c.id, levelOf(profile, c.id)) : undefined), trait);
       if (owned) {
         card.addEventListener('click', () => {
           host.hidden = true;
