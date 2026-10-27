@@ -11,6 +11,7 @@ import {
   applyAction,
   blessingTargets,
   canFly,
+  canOfferTrade,
   chainLength,
   buildOptions,
   buyOptions,
@@ -30,6 +31,7 @@ import {
   rollDice,
   salaryFor,
   totalAssets,
+  tradeValueOf,
   TRAVEL,
 } from './game';
 import { rollDie } from './rng';
@@ -1386,6 +1388,140 @@ describe('特性の強化', () => {
     expect(s.players[1].position).toBe(30);
     expect(s.players[1].money).toBe(3000 - rent);
     expect(s.players[0].traitUsed).toBe(true);
+  });
+});
+
+describe('土地の取引', () => {
+  /** P0 が P1 の苔むす泉（5・ビル）を狙い、自分の漁火の港（9）を対価に出せる状態 */
+  function tradeGame(): GameState {
+    const s = newGame(1);
+    s.properties[5] = { owner: 1, level: 2 };
+    s.properties[9] = { owner: 0, level: 0 };
+    return s;
+  }
+
+  it('提示すると応答フェーズになり、応答する人が actorOf になる', () => {
+    const s0 = tradeGame();
+    expect(canOfferTrade(s0)).toBe(true);
+    const s = applyAction(s0, { type: 'offerTrade', to: 1, want: 5, give: [9], money: 100 });
+    expect(s.phase.kind).toBe('trade');
+    expect(actorOf(s)).toBe(1);
+    expect(s.tradeUsed).toBe(true);
+    expect(s.log.some((e) => /に取引を持ちかけた/.test(e.text))).toBe(true);
+  });
+
+  it('成立すると土地（建物の段階そのまま）とお金が移り、サイコロの場面に戻る', () => {
+    let s = tradeGame();
+    s = applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [9], money: 100 });
+    s = applyAction(s, { type: 'answerTrade', accept: true });
+    expect(s.properties[5]).toEqual({ owner: 0, level: 2 });
+    expect(s.properties[9]).toEqual({ owner: 1, level: 0 });
+    expect(s.players[0].money).toBe(2900);
+    expect(s.players[1].money).toBe(3100);
+    expect(s.phase.kind).toBe('roll');
+    expect(s.log.some((e) => /取引成立/.test(e.text))).toBe(true);
+  });
+
+  it('断ると何も移らず、サイコロの場面に戻る', () => {
+    let s = tradeGame();
+    s = applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [], money: 500 });
+    s = applyAction(s, { type: 'answerTrade', accept: false });
+    expect(s.properties[5].owner).toBe(1);
+    expect(s.players[0].money).toBe(3000);
+    expect(s.players[1].money).toBe(3000);
+    expect(s.phase.kind).toBe('roll');
+    expect(s.log.some((e) => /取引を断った/.test(e.text))).toBe(true);
+  });
+
+  it('1回の手番に2回は持ちかけられず、次の手番ではまた持ちかけられる', () => {
+    let s = tradeGame();
+    s.properties[6] = { owner: 2, level: 0 };
+    s = applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [], money: 500 });
+    s = applyAction(s, { type: 'answerTrade', accept: false });
+    expect(canOfferTrade(s)).toBe(false);
+    expect(() => applyAction(s, { type: 'offerTrade', to: 2, want: 6, give: [], money: 100 })).toThrow(GameError);
+    // 手番を終えると、また取引できる
+    s.players[0].position = 2;
+    s = applyAction({ ...s, seed: seedFor(10) }, { type: 'roll' }); // 沈んだ灯台（観光地・空き地）
+    if (s.phase.kind === 'buy') s = applyAction(s, { type: 'pass' });
+    expect(s.current).toBe(1);
+    expect(s.tradeUsed).toBe(false);
+    expect(canOfferTrade(s)).toBe(true);
+  });
+
+  it('サイコロを振る前以外は持ちかけられない', () => {
+    const s = tradeGame();
+    s.phase = { kind: 'buy', square: 13 };
+    expect(canOfferTrade(s)).toBe(false);
+    expect(() => applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [], money: 100 })).toThrow(GameError);
+  });
+
+  it('相手の土地でないものは指名できない', () => {
+    const s = tradeGame();
+    s.properties[6] = { owner: 2, level: 0 };
+    // 自分の土地
+    expect(() => applyAction(s, { type: 'offerTrade', to: 1, want: 9, give: [], money: 100 })).toThrow(GameError);
+    // 空き地
+    expect(() => applyAction(s, { type: 'offerTrade', to: 1, want: 13, give: [], money: 100 })).toThrow(GameError);
+    // 第3者の土地
+    expect(() => applyAction(s, { type: 'offerTrade', to: 1, want: 6, give: [], money: 100 })).toThrow(GameError);
+  });
+
+  it('対価の検証：他人の土地・所持金超え・対価なし・自分宛ては出せない', () => {
+    const s = tradeGame();
+    expect(() => applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [6], money: 0 })).toThrow(GameError);
+    expect(() => applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [], money: 3001 })).toThrow(GameError);
+    expect(() => applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [], money: 0 })).toThrow(GameError);
+    expect(() => applyAction(s, { type: 'offerTrade', to: 0, want: 5, give: [], money: 100 })).toThrow(GameError);
+  });
+
+  it('祭りの開かれている土地が取引されると、祭りは終わる', () => {
+    let s = tradeGame();
+    s.festivals = [5];
+    s = applyAction(s, { type: 'offerTrade', to: 1, want: 5, give: [9], money: 0 });
+    s = applyAction(s, { type: 'answerTrade', accept: true });
+    expect(s.festivals).not.toContain(5);
+  });
+
+  it('取引で観光地が4つ揃うと守り切りが始まり、手放すと取り消される', () => {
+    let s = newGame(1);
+    for (const sq of [4, 12, 21]) s.properties[sq] = { owner: 0, level: 0 };
+    s.properties[29] = { owner: 1, level: 0 };
+    s = applyAction(s, { type: 'offerTrade', to: 1, want: 29, give: [], money: 400 });
+    s = applyAction(s, { type: 'answerTrade', accept: true });
+    expect(s.touristClaim).toBe(0);
+    // P1 の番にして、P0 の観光地を1つ取り返す
+    s.current = 1;
+    s.tradeUsed = false;
+    s = applyAction(s, { type: 'offerTrade', to: 0, want: 29, give: [], money: 400 });
+    s = applyAction(s, { type: 'answerTrade', accept: true });
+    expect(s.properties[29].owner).toBe(1);
+    expect(s.touristClaim).toBe(null);
+  });
+
+  it('取引で色グループ3つ目が完成すると、その場で勝利になる', () => {
+    let s = newGame(1);
+    for (const sq of [1, 2, 5, 6, 7, 9]) s.properties[sq] = { owner: 0, level: 0 };
+    s.properties[10] = { owner: 1, level: 0 };
+    s = applyAction(s, { type: 'offerTrade', to: 1, want: 10, give: [], money: 500 });
+    s = applyAction(s, { type: 'answerTrade', accept: true });
+    expect(s.phase.kind).toBe('gameover');
+    if (s.phase.kind === 'gameover') {
+      expect(s.phase.winner).toBe(0);
+      expect(s.phase.reason).toBe('triple');
+    }
+  });
+
+  it('tradeValueOf は、完成する土地を投資額より高く、関係ない土地は投資額どおりに評価する', () => {
+    const s = newGame(1);
+    s.properties[5] = { owner: 1, level: 0 };
+    s.properties[6] = { owner: 0, level: 0 };
+    s.properties[7] = { owner: 0, level: 0 };
+    expect(investedValue(s, 5)).toBe(140);
+    expect(tradeValueOf(s, 5, 0)).toBe(224); // P0 が手に入れると森が揃う
+    expect(tradeValueOf(s, 5, 1)).toBe(140); // P1 にとっては投資額どおり
+    s.properties[13] = { owner: 2, level: 0 };
+    expect(tradeValueOf(s, 13, 0)).toBe(220);
   });
 });
 

@@ -9,7 +9,7 @@ import { nextRandom } from '../core/rng';
 import { CharacterId, CHARACTER_LIST, CHARACTERS } from '../data/characters';
 import { CARDS } from '../data/cards';
 import { BOARD } from '../data/board';
-import { GROUP_SQUARES, landPrice } from '../core/game';
+import { GROUP_SQUARES, isTourist, landPrice } from '../core/game';
 const GROUP_PRICE = landPrice;
 import { CONFIG } from '../data/config';
 import { MISSIONS } from '../data/missions';
@@ -57,6 +57,7 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
     for (const [id, o] of Object.entries(_chars ?? {})) Object.assign(CHARACTERS[id as CharacterId], o);
 
     const reasons = { assets: 0, survivor: 0, triple: 0, tourist: 0 };
+    const reasonByPers: Record<string, Record<string, number>> = {};
     const wins: Record<PersonalityId, number> = { bold: 0, careful: 0, schemer: 0 };
     const seen: Record<PersonalityId, number> = { bold: 0, careful: 0, schemer: 0 };
     const seatWins = [0, 0, 0, 0];
@@ -81,6 +82,8 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
     const mis: Record<string, { dealt: number; done: number; turnSum: number }> = {};
     const misWin = { doneWin: 0, doneN: 0, notWin: 0, notN: 0 };
     let claims = 0, buyoutsDone = 0;
+    let tradesOffered = 0, tradesDone = 0, tradesTourist = 0;
+    const claimBy: Record<string, number> = {};
     // 固有特性の発動：キャラごとの回数。聞かれた回数（ask）と使った回数（use）も数える
     const traitHits: Record<string, number> = {};
     const traitAsk: Record<string, { ask: number; use: number; win: number }> = {};
@@ -132,6 +135,8 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
         if (s.phase.kind === 'react') L(s.phase.card).asked++;
         const next = applyAction(s, a);
         for (const e of next.log.slice(s.log.length)) {
+          if (/に取引を持ちかけた/.test(e.text)) tradesOffered++;
+          if (/^取引成立/.test(e.text)) tradesDone++;
           if (e.player !== null && /商魂で/.test(e.text) && s.phase.kind === 'buyout') {
             const sq = s.phase.square;
             const lv = next.properties[sq]?.level ?? 0;
@@ -171,7 +176,11 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
           if (t === 'festival' && s.festivals.includes(np.square)) traitHits[owner] = (traitHits[owner] ?? 0) + 1;
           if (t === 'formation' && g && GROUP_SQUARES[g].every((x) => next.properties[x]?.owner === np.payee)) traitHits[owner] = (traitHits[owner] ?? 0) + 1;
         }
-        if (next.touristClaim !== null && s.touristClaim === null) claims++;
+        if (next.touristClaim !== null && s.touristClaim === null) {
+          claims++;
+          claimBy[a.type] = (claimBy[a.type] ?? 0) + 1;
+        }
+        if (a.type === 'answerTrade' && a.accept && s.phase.kind === 'trade' && isTourist(s.phase.offer.want)) tradesTourist++;
         next.players.forEach((p, i) => {
           if (p.missionDone && !s.players[i].missionDone) {
             const m = (mis[p.mission!] ??= { dealt: 0, done: 0, turnSum: 0 });
@@ -221,6 +230,7 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
         if (p.missionDone) { misWin.doneN++; misWin.doneWin += won; } else { misWin.notN++; misWin.notWin += won; }
       }
       reasons[s.phase.reason]++;
+      (reasonByPers[seats[s.phase.winner]] ??= {})[s.phase.reason] = ((reasonByPers[seats[s.phase.winner]] ?? {})[s.phase.reason] ?? 0) + 1;
       (seatReason[s.phase.reason] ??= [0, 0, 0, 0])[s.phase.winner]++;
       wins[seats[s.phase.winner]]++;
       charWins[chars[s.phase.winner]] = (charWins[chars[s.phase.winner]] ?? 0) + 1;
@@ -244,6 +254,7 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
     const sum = (a: number, b: number) => builds.slice(a, b + 1).reduce((x: number, y: number) => x + y, 0);
     console.log(`==== ${vname}（${N}ゲーム）`);
     console.log('勝ち方', reasons, '1ゲームの破産者', (bankrupt / N).toFixed(2), '土地を売る場面', (liquidations / N).toFixed(2));
+    console.log('勝ち方×性格', JSON.stringify(reasonByPers));
     rents.sort((x, y) => x - y);
     rentRatio.sort((x, y) => x - y);
     const q = (arr: number[], f: number) => arr[Math.floor(arr.length * f)] ?? 0;
@@ -302,8 +313,9 @@ for (const [vname, overrides] of Object.entries(VARIANTS)) {
     console.log('秘密の使命  達成率 / 平均達成ターン');
     for (const [id, m] of Object.entries(mis)) console.log(`  ${MISSIONS[id as keyof typeof MISSIONS].name.padEnd(6, '　')} ${pct(m.done, m.dealt).padStart(6)} / ${(m.turnSum / Math.max(1, m.done)).toFixed(1)}`);
     console.log('使命を達成した人の勝率', pct(misWin.doneWin, misWin.doneN), '／ しなかった人', pct(misWin.notWin, misWin.notN), '／ 1人あたり達成率', pct(misWin.doneN, misWin.doneN + misWin.notN));
-    console.log('観光地の守り切り 挑戦', claims, '成功', reasons.tourist);
+    console.log('観光地の守り切り 挑戦', claims, '成功', reasons.tourist, 'きっかけ', JSON.stringify(claimBy));
     console.log('成功した買収（1ゲームあたり、令状を含む）', (buyoutsDone / N).toFixed(2));
+    console.log('土地の取引（1ゲームあたり） 提示', (tradesOffered / N).toFixed(2), '成立', (tradesDone / N).toFixed(2), '（うち観光地ねらいの成立', tradesTourist, '件）');
     console.log('1ゲームあたりの周回数', IDS.map((id) => `${id} ${(laps[id] / seen[id]).toFixed(2)}`).join(' / '));
 
     Object.assign(CONFIG as Record<string, unknown>, saved);
