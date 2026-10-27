@@ -23,6 +23,7 @@ import {
   festivalLimit,
   festivalTargets,
   sealTargets,
+  statMod,
   Aim,
   AIM_ZONES,
   blessingTargets,
@@ -31,7 +32,11 @@ import {
   choiceTargets,
   completedGroups,
   GameState,
+  GROUP_SQUARES,
+  hasTrait,
+  investedValue,
   isCursed,
+  isLastSpurt,
   isProtected,
   isTourist,
   landPrice,
@@ -133,12 +138,44 @@ const KIND_LABEL: Record<SquareKind, string> = {
 
 const fmt = (n: number) => `${n.toLocaleString('ja-JP')}G`;
 
-/** 建物の立体アイコン（レベル別）。持ち主色は --owner、ランドマークの金は --brass を使う */
+/**
+ * 建物のアイソメトリック（斜め見下ろし）アイコン（レベル別）。
+ * 上面・左面・右面の3面で立体感を出し、持ち主色は --owner、ランドマークの金は --brass を使う。
+ * レベルごとにシルエットがはっきり違う：別荘=三角屋根の家、ビル=高い箱、ホテル=2段重ね、ランドマーク=城。
+ */
+const BUILDING_SHADOW = `<ellipse cx="24" cy="42.5" rx="15" ry="3" fill="rgba(0,0,0,.25)"/>`;
 const BUILDING_SVGS: Record<number, string> = {
-  1: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12.5 12 4l9 8.5" fill="none" stroke="var(--owner)" stroke-width="2.6" stroke-linecap="round"/><rect x="6.4" y="12" width="11.2" height="8.6" rx="0.8" fill="#f5edd9" stroke="rgba(90,70,30,.45)"/><rect x="10.4" y="15.6" width="3.2" height="5" fill="var(--owner)"/></svg>`,
-  2: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="4.6" width="10" height="16" rx="0.8" fill="#e9e2d0" stroke="rgba(90,70,30,.45)"/><rect x="5.6" y="3" width="12.8" height="2.2" rx="1" fill="var(--owner)"/><g fill="var(--owner)" opacity=".75"><rect x="9.2" y="7.6" width="2" height="2.4"/><rect x="12.8" y="7.6" width="2" height="2.4"/><rect x="9.2" y="11.4" width="2" height="2.4"/><rect x="12.8" y="11.4" width="2" height="2.4"/><rect x="9.2" y="15.2" width="2" height="2.4"/><rect x="12.8" y="15.2" width="2" height="2.4"/></g></svg>`,
-  3: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.6" y="8" width="16.8" height="12.6" rx="0.8" fill="#f5edd9" stroke="rgba(90,70,30,.45)"/><rect x="9.8" y="3.4" width="4.4" height="4.6" fill="#e9e2d0" stroke="rgba(90,70,30,.45)"/><path d="M8.6 3.4 12 1l3.4 2.4Z" fill="var(--owner)"/><rect x="3.6" y="8" width="16.8" height="2.4" fill="var(--owner)"/><g fill="var(--owner)" opacity=".7"><rect x="5.8" y="12.6" width="2" height="2.4"/><rect x="9.4" y="12.6" width="2" height="2.4"/><rect x="12.6" y="12.6" width="2" height="2.4"/><rect x="16.2" y="12.6" width="2" height="2.4"/></g><rect x="10.6" y="16.4" width="2.8" height="4.2" fill="var(--owner)"/></svg>`,
-  4: `<svg viewBox="0 0 24 24" aria-hidden="true"><g fill="#efe3c2" stroke="rgba(120,90,20,.55)"><rect x="3.4" y="9" width="4" height="11.6"/><rect x="16.6" y="9" width="4" height="11.6"/><rect x="9" y="6.4" width="6" height="14.2"/></g><g fill="var(--brass)"><rect x="3.4" y="7" width="1.8" height="2"/><rect x="5.9" y="7" width="1.5" height="2"/><rect x="16.6" y="7" width="1.8" height="2"/><rect x="18.7" y="7" width="1.9" height="2"/><rect x="9" y="4.4" width="1.9" height="2"/><rect x="12" y="4.4" width="1.9" height="2"/></g><path d="M12 0.8v3" stroke="#a87f2e" stroke-width="1.2"/><path d="M12 0.8l3 1-3 1Z" fill="#c0392b"/><rect x="10.7" y="15.6" width="2.6" height="5" rx="1.3" fill="#7a5c14"/></svg>`,
+  1: `<svg viewBox="0 0 48 46" aria-hidden="true">${BUILDING_SHADOW}<polygon points="13,25.5 24,31 24,39 13,33.5" fill="#ded3ba"/><polygon points="24,31 35,25.5 35,33.5 24,39" fill="#f7f0dd"/><polygon points="13,25.5 24,31 24,13" fill="var(--owner)" opacity=".82"/><polygon points="24,31 35,25.5 24,13" fill="var(--owner)"/><polygon points="16.5,29.3 20,31 20,34 16.5,32.3" fill="var(--owner)" opacity=".7"/><polygon points="27,32.6 30.5,30.9 30.5,36.4 27,38.1" fill="var(--owner)"/></svg>`,
+  2: `<svg viewBox="0 0 48 46" aria-hidden="true">${BUILDING_SHADOW}<polygon points="24,6.5 36.5,12.75 24,19 11.5,12.75" fill="var(--owner)"/><polygon points="13,14.5 24,20 24,40 13,34.5" fill="#ded3ba"/><polygon points="24,20 35,14.5 35,34.5 24,40" fill="#f7f0dd"/><polygon points="24,9 35,14.5 24,20 13,14.5" fill="#efe8d5"/><g fill="var(--owner)" opacity=".72"><polygon points="15,18.6 18.4,20.3 18.4,23.9 15,22.2"/><polygon points="19.2,20.7 22.6,22.4 22.6,26 19.2,24.3"/><polygon points="15,24.6 18.4,26.3 18.4,29.9 15,28.2"/><polygon points="19.2,26.7 22.6,28.4 22.6,32 19.2,30.3"/><polygon points="15,30.6 18.4,32.3 18.4,35.9 15,34.2"/><polygon points="26,20.5 29.4,18.8 29.4,22.4 26,24.1"/><polygon points="30.2,18.4 33.6,16.7 33.6,20.3 30.2,22"/><polygon points="26,26.5 29.4,24.8 29.4,28.4 26,30.1"/><polygon points="30.2,24.4 33.6,22.7 33.6,26.3 30.2,28"/><polygon points="26,32.5 29.4,30.8 29.4,34.4 26,36.1"/><polygon points="30.2,30.4 33.6,28.7 33.6,32.3 30.2,34"/></g></svg>`,
+  3: `<svg viewBox="0 0 48 46" aria-hidden="true">${BUILDING_SHADOW}<polygon points="16,8 24,12 24,20 16,16" fill="#ded3ba"/><polygon points="24,12 32,8 32,16 24,20" fill="#f7f0dd"/><polygon points="24,4 32,8 24,12 16,8" fill="var(--owner)"/><polygon points="8,25 24,32 24,41 8,34" fill="#ded3ba"/><polygon points="24,32 40,25 40,34 24,41" fill="#f7f0dd"/><polygon points="24,18 40,25 24,32 8,25" fill="#efe8d5"/><polygon points="8,26.8 24,33.8 24,36.8 8,29.8" fill="var(--owner)" opacity=".9"/><polygon points="24,33.8 40,26.8 40,29.8 24,36.8" fill="var(--owner)" opacity=".9"/><circle cx="24" cy="8.2" r="1.5" fill="var(--brass)"/><g fill="var(--owner)" opacity=".75"><polygon points="18.5,11 21,12.25 21,15 18.5,13.75"/><polygon points="25,12.25 27.5,11 27.5,13.75 25,15"/></g><g fill="#8a744a" opacity=".65"><polygon points="11,31.5 14.6,33.3 14.6,36.3 11,34.5"/><polygon points="16.5,34 20.1,35.8 20.1,38.8 16.5,37"/><polygon points="31,32.6 34.6,30.8 34.6,33.8 31,35.6"/></g><polygon points="25.2,34.8 28.8,33 28.8,38.6 25.2,40.4" fill="var(--owner)"/></svg>`,
+  4: `<svg viewBox="0 0 48 46" aria-hidden="true"><ellipse cx="24" cy="44" rx="16" ry="2.8" fill="rgba(0,0,0,.25)"/><polygon points="8.5,17.25 13,19.5 13,34 8.5,31.75" fill="#ded3ba"/><polygon points="13,19.5 17.5,17.25 17.5,31.75 13,34" fill="#f7f0dd"/><polygon points="8.5,17.25 13,19.5 13,9.5" fill="var(--brass)" opacity=".85"/><polygon points="13,19.5 17.5,17.25 13,9.5" fill="var(--brass)"/><polygon points="30.5,17.25 35,19.5 35,34 30.5,31.75" fill="#ded3ba"/><polygon points="35,19.5 39.5,17.25 39.5,31.75 35,34" fill="#f7f0dd"/><polygon points="30.5,17.25 35,19.5 35,9.5" fill="var(--brass)" opacity=".85"/><polygon points="35,19.5 39.5,17.25 35,9.5" fill="var(--brass)"/><polygon points="16.5,12.75 24,16.5 24,28 16.5,24.25" fill="#e3d8bf"/><polygon points="24,16.5 31.5,12.75 31.5,24.25 24,28" fill="#f7f0dd"/><polygon points="16.5,12.75 24,16.5 24,2.5" fill="var(--brass)" opacity=".85"/><polygon points="24,16.5 31.5,12.75 24,2.5" fill="var(--brass)"/><line x1="24" y1="2.5" x2="24" y2="0.2" stroke="#7a5c14" stroke-width="1.1"/><polygon points="24,0.2 27.5,1.3 24,2.4" fill="#c0392b"/><polygon points="8,32 24,40 24,44.5 8,36.5" fill="#d5c8ab"/><polygon points="24,40 40,32 40,36.5 24,44.5" fill="#efe6cf"/><polygon points="24,24 40,32 24,40 8,32" fill="#e9e2d0"/><polyline points="8,32 24,40 40,32" fill="none" stroke="var(--brass)" stroke-width="1.6"/><g fill="var(--brass)"><polygon points="20.8,19.5 23,20.6 23,23.4 20.8,22.3"/><polygon points="25,20.6 27.2,19.5 27.2,22.3 25,23.4"/></g></svg>`,
+};
+
+/** 特殊マスのイラスト（土地以外のマス）。観光地は場所ごとのモチーフ */
+const ART_SHADOW = `<ellipse cx="24" cy="36.5" rx="15" ry="2.8" fill="rgba(0,0,0,.22)"/>`;
+const KIND_ART: Partial<Record<SquareKind, string>> = {
+  start: `<svg viewBox="0 0 48 40" aria-hidden="true">${ART_SHADOW}<rect x="11" y="12" width="5" height="22" rx="1" fill="#d9d2c3" stroke="rgba(90,70,30,.4)"/><rect x="32" y="12" width="5" height="22" rx="1" fill="#d9d2c3" stroke="rgba(90,70,30,.4)"/><polygon points="7,12 41,12 37.5,6 10.5,6" fill="var(--brass)"/><polygon points="24,0.5 31,6 17,6" fill="#9a7426"/><circle cx="24" cy="21" r="3.6" fill="var(--brass)" stroke="#9a7426"/></svg>`,
+  chance: `<svg viewBox="0 0 48 40" aria-hidden="true"><ellipse cx="24" cy="36.5" rx="13" ry="2.6" fill="rgba(0,0,0,.22)"/><rect x="16" y="5" width="16" height="27" rx="3" fill="#b9bec9" stroke="#8a90a0" stroke-width="1.4"/><polygon points="24,10 26.1,15.2 31,17 26.1,18.8 24,24 21.9,18.8 17,17 21.9,15.2" fill="var(--brass)"/><rect x="12" y="32" width="24" height="3.6" rx="1.8" fill="#9aa0ae"/></svg>`,
+  island: `<svg viewBox="0 0 48 40" aria-hidden="true"><ellipse cx="24" cy="34.5" rx="18" ry="4.2" fill="#5aa7c7" opacity=".55"/><polygon points="10,34.5 14.5,21.5 21,16.5 28.5,17.5 35,23.5 38,34.5" fill="#8d8d94"/><polygon points="21,16.5 28.5,17.5 35,23.5 38,34.5 25,34.5" fill="#74747c"/><rect x="17.2" y="7.5" width="13.6" height="17" fill="#cfd4dc" opacity=".45"/><g fill="#33373f"><rect x="18.6" y="7.5" width="2.3" height="17" rx="1"/><rect x="22.85" y="7.5" width="2.3" height="17" rx="1"/><rect x="27.1" y="7.5" width="2.3" height="17" rx="1"/><rect x="16.6" y="6.4" width="14.8" height="2.6" rx="1.3"/><rect x="16.6" y="15" width="14.8" height="2.2" rx="1.1"/><rect x="16.6" y="23.4" width="14.8" height="2.4" rx="1.2"/></g></svg>`,
+  festival: `<svg viewBox="0 0 48 40" aria-hidden="true">${ART_SHADOW}<rect x="9" y="10" width="2.6" height="24" rx="1" fill="#7a5c14"/><rect x="36.4" y="10" width="2.6" height="24" rx="1" fill="#7a5c14"/><path d="M10.3 11 Q24 19.5 37.7 11" stroke="#c2453d" stroke-width="1.6" fill="none"/><polygon points="14.5,13.8 18.5,15.2 16,19" fill="#c9a227"/><polygon points="22,16.2 26,16.2 24,20" fill="#3a74d8"/><polygon points="29.5,15.2 33.5,13.8 32,19" fill="#2f9e57"/><ellipse cx="10.3" cy="19" rx="3.6" ry="4.8" fill="#e2574c"/><rect x="7.9" y="13.6" width="4.8" height="1.8" rx=".9" fill="#7a5c14"/><ellipse cx="37.7" cy="19" rx="3.6" ry="4.8" fill="#e2574c"/><rect x="35.3" y="13.6" width="4.8" height="1.8" rx=".9" fill="#7a5c14"/><ellipse cx="24" cy="27" rx="3.2" ry="4.3" fill="#f0a13c"/><rect x="21.8" y="22.2" width="4.4" height="1.7" rx=".85" fill="#7a5c14"/></svg>`,
+  travel: `<svg viewBox="0 0 48 40" aria-hidden="true"><ellipse cx="24" cy="31" rx="16" ry="5.5" fill="#cfc4e8"/><ellipse cx="24" cy="30" rx="14.5" ry="4.8" fill="#e6defa" stroke="#8b6bc2" stroke-width="1.6"/><ellipse cx="24" cy="30" rx="8.5" ry="2.9" fill="none" stroke="#8b6bc2" stroke-width="1.3"/><polygon points="24,1.5 26,6.4 30.5,8.5 26,10.6 24,15.5 22,10.6 17.5,8.5 22,6.4" fill="#8b6bc2"/><polygon points="11,10 12.2,13 15,14.2 12.2,15.4 11,18.4 9.8,15.4 7,14.2 9.8,13" fill="#b79ce0"/><polygon points="37,10 38.2,13 41,14.2 38.2,15.4 37,18.4 35.8,15.4 33,14.2 35.8,13" fill="#b79ce0"/><circle cx="24" cy="30" r="1.8" fill="#8b6bc2"/></svg>`,
+};
+
+/** 観光地ごとのモチーフ（マス番号キー）：古代樹の神殿=大樹、沈んだ灯台=灯台、竜骨の谷=竜の骨、天空の浮島=浮島 */
+const TOURIST_ART: Record<number, string> = {
+  4: `<svg viewBox="0 0 48 40" aria-hidden="true"><ellipse cx="24" cy="36.5" rx="14" ry="2.6" fill="rgba(0,0,0,.22)"/><path d="M22 35 L23.2 21 L24.8 21 L26 35 Z" fill="#7a5230"/><circle cx="24" cy="12.5" r="7.6" fill="#4f8f5a"/><circle cx="16.3" cy="17" r="5.4" fill="#3f7a49"/><circle cx="31.7" cy="17" r="5.4" fill="#4f8f5a"/><circle cx="24" cy="18.5" r="6.2" fill="#589c63"/><rect x="21" y="29.5" width="6" height="5.5" fill="#ece7dc" stroke="rgba(90,70,30,.4)"/><polygon points="19.8,29.5 28.2,29.5 24,25.8" fill="var(--brass)"/></svg>`,
+  12: `<svg viewBox="0 0 48 40" aria-hidden="true"><ellipse cx="24" cy="35" rx="15" ry="3.6" fill="#5aa7c7" opacity=".65"/><polygon points="26.5,7.5 38,4.5 38,12 26.5,10.5" fill="#ffd94d" opacity=".35"/><polygon points="20.5,32 22,13 26,13 27.5,32" fill="#f5edd9" stroke="rgba(90,70,30,.35)"/><polygon points="21.5,20.5 26.5,20.5 27,25 21,25" fill="#c2453d"/><rect x="20.6" y="7.6" width="6.8" height="5.2" fill="#3c414c"/><circle cx="24" cy="10.2" r="1.9" fill="#ffd94d"/><polygon points="19.6,7.6 28.4,7.6 24,3.2" fill="#c2453d"/></svg>`,
+  21: `<svg viewBox="0 0 48 40" aria-hidden="true"><ellipse cx="24" cy="36.2" rx="15" ry="2.8" fill="rgba(0,0,0,.22)"/><polygon points="7,35.5 13.5,26.5 34.5,26.5 41,35.5" fill="#a68d5f" stroke="#8a744a"/><g stroke="rgba(0,0,0,.18)" stroke-width="4.4" fill="none" stroke-linecap="round"><path d="M14.5 34.5 Q15.5 21 21.5 15.5"/><path d="M22.5 34.5 Q23.5 18 29.5 13.5"/><path d="M30.5 34.5 Q31.5 22 36.5 17.5"/></g><g stroke="#f0e7cd" stroke-width="3.4" fill="none" stroke-linecap="round"><path d="M14.5 33.5 Q15.5 20 21.5 14.5"/><path d="M22.5 33.5 Q23.5 17 29.5 12.5"/><path d="M30.5 33.5 Q31.5 21 36.5 16.5"/></g><path d="M11 34 Q24 29.8 38.5 33" stroke="#e2d5ae" stroke-width="2.6" fill="none"/><circle cx="37.8" cy="28.8" r="2.8" fill="#f0e7cd"/><circle cx="36.9" cy="28.5" r=".85" fill="#8a7a5c"/></svg>`,
+  29: `<svg viewBox="0 0 48 40" aria-hidden="true"><polygon points="10.5,14.5 37.5,14.5 27,29.5 24,32.5 21,29.5" fill="#9a8a76"/><polygon points="24,14.5 37.5,14.5 27,29.5 24,32.5" fill="#87765f"/><ellipse cx="24" cy="14" rx="14" ry="4.4" fill="#9cc46b"/><rect x="20" y="5.5" width="8" height="6.5" fill="#ece7dc" stroke="rgba(90,70,30,.35)"/><polygon points="18.8,5.5 29.2,5.5 24,1.2" fill="var(--brass)"/><circle cx="32.5" cy="9" r="2.7" fill="#4f8f5a"/><rect x="31.9" y="10.5" width="1.3" height="2.6" fill="#7a5230"/><g fill="#ffffff" opacity=".85"><ellipse cx="11" cy="35" rx="6" ry="2.1"/><ellipse cx="24" cy="37.6" rx="8" ry="2.3"/><ellipse cx="36" cy="35" rx="6" ry="2.1"/></g></svg>`,
+};
+
+/** 特殊マスの効果説明（詳細パネル用） */
+const SPECIAL_TEXT: Partial<Record<SquareKind, string>> = {
+  start: `通過すると給料（基本${fmt(CONFIG.salary)}＋土地1つ${fmt(CONFIG.landIncomePerLand)}＋建物1段階${fmt(CONFIG.landIncomePerLevel)}、総資産が最下位なら2倍）がもらえます。ぴったり止まると祝福：自分の土地を無料で1段階上げられます。`,
+  chance: '運命の石碑。止まると運命のカードをめくり、選んだ1枚を手札に加えられます。',
+  island: `霧の孤島。止まると最大${CONFIG.islandTurns}手番動けなくなります。ゾロ目が出れば脱出でき、${fmt(CONFIG.escapeFee)}を払って出ることもできます。封印の鎖やゾロ目3連続でも送られてきます。`,
+  festival: `収穫祭の広場。止まると自分の土地1つで祭りを開けます。祭りの土地は通行料が${CONFIG.festivalMultiplier}倍（祭囃子のキャラは${CONFIG.mishaFestivalMultiplier}倍）になります。`,
+  travel: '転移の魔法陣。止まると好きなマスへワープできます。始まりの門を越えると給料がもらえます。',
 };
 
 /** プレイヤーのコマ（チェスのポーン型）。色は --c を使う */
@@ -220,10 +257,11 @@ export class View {
     }).observe(this.boardEl);
     for (const sq of BOARD) {
       const { row, col, side } = placement(sq.index);
-      const tile = el('div', `tile side-${side}`);
+      const tile = el('div', `tile side-${side} kind-${sq.kind}`);
       tile.style.gridRow = String(row);
       tile.style.gridColumn = String(col);
       if (sq.kind !== 'land') tile.classList.add('special');
+      if (sq.kind === 'tourist') tile.classList.add('tourist');
       if (isCorner(sq)) tile.classList.add('corner');
       if (sq.group) tile.style.setProperty('--band', GROUPS[sq.group].color);
       const fest = el('span', 'fest-badge', '祭');
@@ -232,20 +270,80 @@ export class View {
       sanct.title = '聖域の紋章で守られている（買収・略奪の令状の対象にならない）';
       const curse = el('span', 'curse-badge', '呪');
       curse.title = '呪いの刻印（持ち主が1周するまで通行料0）';
-      tile.append(el('div', 'band'), el('div', 'name', sq.name), el('div', 'sub'), el('div', 'lv'), fest, sanct, curse, el('div', 'tokens'));
-      tile.addEventListener('click', () => {
-        if (tile.classList.contains('selectable')) this.onTileClick?.(sq.index);
-      });
+      const art = el('div', 'art');
+      const artSvg = sq.kind === 'tourist' ? TOURIST_ART[sq.index] : KIND_ART[sq.kind];
+      if (artSvg) art.innerHTML = artSvg;
+      // 価格・通行料と建物アイコンは1行に並べる（スマホの小さいマスでも収まるように）
+      const meta = el('div', 'meta');
+      meta.append(el('div', 'sub'), el('div', 'lv'));
+      tile.append(el('div', 'band'), el('div', 'name', sq.name), art, meta, fest, sanct, curse, el('div', 'tokens'));
+      tile.addEventListener('click', () => this.tapTile(sq.index));
       tile.addEventListener('keydown', (e) => {
-        if ((e.key === 'Enter' || e.key === ' ') && tile.classList.contains('selectable')) {
+        if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          this.onTileClick?.(sq.index);
+          this.tapTile(sq.index);
         }
       });
       this.tiles.push(tile);
       this.boardEl.append(tile);
     }
+    this.buildSheet();
     requestAnimationFrame(this.tickGauge);
+  }
+
+  /** マスをタップしたとき：対象選択中ならそちらを優先し、それ以外は詳細シートを開く */
+  private tapTile(i: number) {
+    if (this.tiles[i].classList.contains('selectable')) {
+      this.onTileClick?.(i);
+      return;
+    }
+    if (!this.selectionActive) this.openDetail(i);
+  }
+
+  // ---- マスの詳細シート ----
+  private detailSquare: number | null = null;
+  /** 対象選択の場面かどうか（選択中はタップを詳細表示に使わない） */
+  private selectionActive = false;
+  private sheetEl!: HTMLElement;
+  private sheetTitle!: HTMLElement;
+  private sheetBody!: HTMLElement;
+
+  /** 詳細シートの土台（画面下から出るパネル）を1回だけ作る */
+  private buildSheet() {
+    const overlay = el('div', 'sheet-overlay');
+    overlay.hidden = true;
+    const sheet = el('section', 'sheet');
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-modal', 'false');
+    sheet.setAttribute('aria-label', 'マスの詳細');
+    const head = el('div', 'sheet-head');
+    this.sheetTitle = el('h3', 'sheet-title', 'マスの詳細');
+    const close = el('button', 'sheet-close', '✕');
+    close.setAttribute('aria-label', '詳細を閉じる');
+    close.addEventListener('click', () => this.closeDetail());
+    head.append(this.sheetTitle, close);
+    this.sheetBody = el('div', 'sheet-body');
+    sheet.append(head, this.sheetBody);
+    overlay.append(sheet);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.closeDetail();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.closeDetail();
+    });
+    document.body.append(overlay);
+    this.sheetEl = overlay;
+  }
+
+  private openDetail(i: number) {
+    this.detailSquare = i;
+    this.sheetEl.hidden = false;
+    if (this.last) this.refreshDetail(this.last[0]);
+  }
+
+  closeDetail() {
+    this.detailSquare = null;
+    if (this.sheetEl) this.sheetEl.hidden = true;
   }
 
   private human = 0;
@@ -277,11 +375,14 @@ export class View {
       this.tradeDraft = null;
     }
     this.pendingKey = key;
+    // あなたが判断する場面では詳細シートを閉じて、操作パネルを見せる
+    if (myTurn) this.closeDetail();
     this.renderTiles(s, x, myTurn);
     this.renderCenter(s, x, myTurn);
     this.renderHand(s, x, myTurn);
     this.renderPlayers(s, x);
     this.renderLog(s, x);
+    if (this.detailSquare !== null) this.refreshDetail(s);
   }
 
   /** 手札のカードを使う。対象が必要なカードは、対象選びの画面にする */
@@ -348,6 +449,7 @@ export class View {
   private renderTiles(s: GameState, x: ViewExtras, myTurn: boolean) {
     const sel = this.selectable(s, myTurn);
     this.onTileClick = sel?.onPick ?? null;
+    this.selectionActive = !!sel;
     const ph = s.phase;
     const highlight = (ph.kind === 'buy' || ph.kind === 'build' || ph.kind === 'buyout') && !x.busy ? ph.square : -1;
 
@@ -356,10 +458,15 @@ export class View {
       const sub = tile.querySelector('.sub')!;
       const prop = s.properties[i];
 
+      // マスに出すのは土地名・建物・通行料（所有者は枠の色で判別）。空き地は価格
       if (sq.kind === 'land' || sq.kind === 'tourist') {
-        sub.textContent = prop ? `${s.players[prop.owner].name}・${fmt(rentOf(s, i))}` : fmt(landPrice(i));
+        const text = prop ? fmt(rentOf(s, i)) : fmt(landPrice(i));
+        sub.textContent = text;
+        // 4桁以上の金額は、スマホの小さいマスでも切れないよう少し詰める
+        sub.classList.toggle('long', text.length >= 7);
       } else if (!isCorner(sq)) {
         sub.textContent = KIND_LABEL[sq.kind];
+        sub.classList.remove('long');
       }
 
       const lv = tile.querySelector('.lv')!;
@@ -384,9 +491,16 @@ export class View {
       if (pickable) {
         tile.tabIndex = 0;
         tile.setAttribute('role', 'button');
+        tile.removeAttribute('aria-label');
+      } else if (!sel) {
+        // 対象選択中でないときは、タップで詳細を開けるボタンとして扱う
+        tile.tabIndex = 0;
+        tile.setAttribute('role', 'button');
+        tile.setAttribute('aria-label', `${sq.name}の詳細を見る`);
       } else {
         tile.removeAttribute('tabindex');
         tile.removeAttribute('role');
+        tile.removeAttribute('aria-label');
       }
       tile.classList.toggle('highlight', highlight === i);
       tile.title = this.tileTitle(s, sq);
@@ -428,6 +542,149 @@ export class View {
     const bonus = CONFIG.chainBonus[Math.min(chain, CONFIG.chainBonus.length - 1)] ?? 0;
     const chainText = bonus > 0 ? `\n${chain}マス連続で通行料+${Math.round(bonus * 100)}%` : '';
     return `${sq.name}（${g.name}）\n価格 ${fmt(g.price)} / ${owner}${fest}${fx}${chainText}`;
+  }
+
+  /** 通行料の内訳（基礎と、効いている倍率・補正の内訳）。合計は rentOf の値と一致させる */
+  private rentSteps(s: GameState, sq: Square): string[] {
+    const prop = s.properties[sq.index];
+    if (!prop) return [];
+    if (isCursed(s, sq.index)) return ['呪いの刻印が効いているため、通行料は0'];
+    const owner = s.players[prop.owner];
+    const prestige = statMod(owner, 'prestige');
+    const pct = (m: number) => `${m >= 0 ? '+' : ''}${Math.round(m * 100)}%`;
+    const steps: string[] = [];
+    if (isTourist(sq.index)) {
+      const n = touristCount(s, prop.owner);
+      steps.push(`基礎 ${fmt(CONFIG.touristRent[n])}（観光地${n}つ所有）`);
+      if (prestige !== 0) steps.push(`威光 ${pct(prestige)}`);
+      if (hasTrait(owner, 'voyage')) steps.push(`大航海 ×${CONFIG.voyageTouristRentRate}`);
+      if (isLastSpurt(s)) steps.push(`ラストスパート ×${CONFIG.lastSpurtRate}`);
+      return steps;
+    }
+    steps.push(`基礎 ${fmt(rentAt(sq.index, prop.level))}（${LEVEL_NAMES[prop.level]}）`);
+    if (prestige !== 0) steps.push(`威光 ${pct(prestige)}`);
+    if (s.festivals.includes(sq.index)) {
+      steps.push(`祭り ×${hasTrait(owner, 'festival') ? CONFIG.mishaFestivalMultiplier : CONFIG.festivalMultiplier}`);
+    }
+    const chain = chainLength(s, sq.index);
+    const bonus = CONFIG.chainBonus[Math.min(chain, CONFIG.chainBonus.length - 1)] ?? 0;
+    if (bonus > 0) steps.push(`連続${chain}マス +${Math.round(bonus * 100)}%`);
+    const g = sq.group;
+    if (g && hasTrait(owner, 'formation') && completedGroups(s, prop.owner).includes(g)) steps.push(`布陣 ×${CONFIG.formationRate}`);
+    if (isLastSpurt(s)) steps.push(`ラストスパート ×${CONFIG.lastSpurtRate}`);
+    return steps;
+  }
+
+  /** 詳細シートの中身を、いまの状態で作り直す */
+  private refreshDetail(s: GameState) {
+    const i = this.detailSquare;
+    if (i === null) return;
+    const sq = BOARD[i];
+    const prop = s.properties[i];
+    this.sheetTitle.textContent = sq.name;
+    const body = this.sheetBody;
+    body.replaceChildren();
+
+    const kindText =
+      sq.kind === 'land' ? `${GROUPS[sq.group!].name}グループの土地` : sq.kind === 'tourist' ? '観光地' : KIND_LABEL[sq.kind];
+    body.append(el('p', 'detail-kind', kindText));
+
+    // 特殊マスは効果の説明だけ
+    if (sq.kind !== 'land' && sq.kind !== 'tourist') {
+      if (SPECIAL_TEXT[sq.kind]) body.append(el('p', 'detail-desc', SPECIAL_TEXT[sq.kind]!));
+      const here = s.players.filter((p) => !p.bankrupt && p.position === i);
+      if (here.length) {
+        body.append(el('p', 'detail-desc', `いまここにいる人：${here.map((p) => p.name).join('・')}`));
+      }
+      return;
+    }
+
+    const rows = el('dl', 'detail-rows');
+    const row = (label: string, value: Node | string) => {
+      const div = el('div');
+      const dd = el('dd');
+      if (typeof value === 'string') dd.textContent = value;
+      else dd.append(value);
+      div.append(el('dt', '', label), dd);
+      rows.append(div);
+    };
+    const ownerSpan = (id: number) => {
+      const span = el('span', 'detail-owner');
+      const dot = el('span', 'dot');
+      dot.style.setProperty('--c', s.players[id].color);
+      span.append(dot, id === this.human ? `${s.players[id].name}（あなた）` : s.players[id].name);
+      return span;
+    };
+
+    row('所有者', prop ? ownerSpan(prop.owner) : '空き地');
+    if (sq.kind === 'land') row('建物', prop ? LEVEL_NAMES[prop.level] : '—');
+    row('土地価格', fmt(landPrice(i)));
+    if (prop) {
+      row('投資総額', fmt(investedValue(s, i)));
+      if (prop.owner !== s.current) {
+        row('買収価格', LEVEL.LANDMARK === prop.level ? '買収できない（ランドマーク）' : `${fmt(buyoutPrice(s, i))}（${s.players[s.current].name}が買収する場合）`);
+      }
+      if (isProtected(s, i)) row('聖域の紋章', `あと${(prop.protectedUntil ?? s.turn) - s.turn + 1}ターン買収されない`);
+      if (s.festivals.includes(i)) row('祭り', '開催中（通行料アップ）');
+    }
+    body.append(rows);
+
+    // 通行料とその内訳
+    if (prop) {
+      const rent = el('div', 'detail-rent');
+      const total = el('p', 'rent-total');
+      total.append('いま止まると通行料 ', el('strong', '', fmt(rentOf(s, i))));
+      rent.append(total);
+      const steps = this.rentSteps(s, sq);
+      if (steps.length) {
+        const ul = el('ul', 'rent-steps');
+        for (const t of steps) ul.append(el('li', '', t));
+        rent.append(ul);
+      }
+      body.append(rent);
+    }
+
+    // 色グループ／観光地の所有状況
+    const status = el('div', 'detail-group');
+    if (sq.kind === 'land') {
+      const squares = GROUP_SQUARES[sq.group!];
+      status.append(el('span', 'detail-group-label', `${GROUPS[sq.group!].name}グループ`));
+      for (const x of squares) {
+        const chip = el('span', 'sq-chip');
+        const xp = s.properties[x];
+        const dot = el('span', 'dot');
+        dot.style.setProperty('--c', xp ? s.players[xp.owner].color : 'rgba(128,128,128,.45)');
+        chip.append(dot, BOARD[x].name);
+        if (x === i) chip.classList.add('self');
+        status.append(chip);
+      }
+      if (prop) {
+        const n = squares.filter((x) => s.properties[x]?.owner === prop.owner).length;
+        status.append(
+          el('span', 'detail-group-note', n >= squares.length ? '独占中！' : `${s.players[prop.owner].name} は ${n}/${squares.length}（あと${squares.length - n}つで独占）`),
+        );
+      }
+    } else {
+      status.append(el('span', 'detail-group-label', '観光地'));
+      for (const x of TOURIST_SQUARES) {
+        const chip = el('span', 'sq-chip');
+        const xp = s.properties[x];
+        const dot = el('span', 'dot');
+        dot.style.setProperty('--c', xp ? s.players[xp.owner].color : 'rgba(128,128,128,.45)');
+        chip.append(dot, BOARD[x].name);
+        if (x === i) chip.classList.add('self');
+        status.append(chip);
+      }
+      if (prop) {
+        const n = touristCount(s, prop.owner);
+        const note =
+          s.touristClaim === prop.owner
+            ? `守り切り中（${n}/${TOURIST_SQUARES.length}）`
+            : `${s.players[prop.owner].name} は ${n}/${TOURIST_SQUARES.length}（あと${TOURIST_SQUARES.length - n}つで独占）`;
+        status.append(el('span', 'detail-group-note', note));
+      }
+    }
+    body.append(status);
   }
 
   private renderCenter(s: GameState, x: ViewExtras, myTurn: boolean) {
@@ -1686,6 +1943,7 @@ export class View {
 
   /** 起動直後のタイトル画面。「はじめる」でキャラ選びへ進む */
   showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null, nav?: { onGacha: () => void; onCollection: () => void }) {
+    this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
     // 装備中のタイトルテーマを反映（テーマは2種とも専用クラス）
@@ -1748,6 +2006,7 @@ export class View {
 
   /** ゲーム開始前のキャラ選び。profile があれば未所持キャラをロックし、所持キャラにレベルを出す */
   showCharacterSelect(host: HTMLElement, onPick: (id: CharacterId) => void, profile?: Profile | null) {
+    this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
     const wrap = el('div', 'select-wrap');
@@ -1803,6 +2062,7 @@ export class View {
 
   /** ガチャ画面。回す→光る→結果、の短い演出つき */
   showGacha(host: HTMLElement, profile: Profile, h: GachaHandlers) {
+    this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
     let current = profile;
@@ -1889,6 +2149,7 @@ export class View {
 
   /** コレクション画面。見た目アイテムの装備と、所持キャラのレベル確認ができる */
   showCollection(host: HTMLElement, profile: Profile, h: CollectionHandlers) {
+    this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
     let current = profile;
