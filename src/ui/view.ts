@@ -492,10 +492,14 @@ export class View {
 
   /**
    * 3D盤面の描画ループを回すかどうかを切り替える。
-   * 対戦画面（render）では true、それ以外の画面（タイトル／選択／ガチャ／コレクション）では false にし、
-   * 画面の裏で WebGL の描画を回し続けて CPU/GPU を消費しないようにする
+   * 呼び出しは画面遷移のタイミングに限る：対戦画面に入るとき（main の goTo('game')／
+   * begin）true、それ以外の画面（タイトル／選択／ガチャ／コレクション）では false にし、
+   * 画面の裏で WebGL の描画を回し続けて CPU/GPU を消費しないようにする。
+   * ゲーム状態の再描画（render）からは呼ばない：対戦離脱後に残ったコールバックが
+   * render を呼んでもループは再開せず、逆に履歴で対戦へ戻ったときは goTo 側の
+   * 遷移で確実に再開する
    */
-  private setBoardWanted(on: boolean) {
+  setBoardWanted(on: boolean) {
     this.boardWanted = on;
     this.board3d?.setActive(on);
   }
@@ -734,8 +738,10 @@ export class View {
   private pendingKey = '';
 
   render(s: GameState, x: ViewExtras) {
-    // render は対戦画面でだけ呼ばれる。3D盤面の描画ループはここから有効化する
-    this.setBoardWanted(true);
+    // 描画ループの有効化はここでは行わない。有効／停止は画面遷移（main の goTo／
+    // begin と、各画面の表示メソッド）から setBoardWanted で駆動する。
+    // 対戦を離れたあとに残ったコールバックが render を呼んでも、裏でループが
+    // 再開しないようにするため
     this.last = [s, x];
     this.human = x.human;
     // いま決めるのがあなたか（守りのカードの割り込みでは、相手の手番でもあなたが決めることがある）
