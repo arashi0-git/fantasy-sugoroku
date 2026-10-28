@@ -56,6 +56,7 @@ import {
   salaryFor,
   sanctuaryTargets,
   curseTargets,
+  escapeFeeOf,
   sellValue,
   stealTargets,
   swapGiveTargets,
@@ -183,7 +184,7 @@ const TOURIST_ART: Record<number, string> = {
 const SPECIAL_TEXT: Partial<Record<SquareKind, string>> = {
   start: `通過すると給料（基本${fmt(CONFIG.salary)}＋土地1つ${fmt(CONFIG.landIncomePerLand)}＋建物1段階${fmt(CONFIG.landIncomePerLevel)}、総資産が最下位なら2倍）がもらえます。ぴったり止まると祝福：自分の土地を無料で1段階上げられます。`,
   chance: '運命の石碑。止まると運命のカードをめくり、選んだ1枚を手札に加えられます。',
-  island: `霧の孤島。止まると最大${CONFIG.islandTurns}手番動けなくなります。ゾロ目が出れば脱出でき、${fmt(CONFIG.escapeFee)}を払って出ることもできます。封印の鎖やゾロ目3連続でも送られてきます。`,
+  island: `霧の孤島。止まると最大${CONFIG.islandTurns}手番動けなくなります。ゾロ目が出れば脱出でき、脱出料（総資産の${Math.round(CONFIG.escapeFeeRate * 100)}%、最低${fmt(CONFIG.escapeFeeMin)}）を払って出ることもできます。封印の鎖やゾロ目3連続でも送られてきます。`,
   festival: `収穫祭の広場。止まると自分の土地1つで祭りを開けます。祭りの土地は通行料が${CONFIG.festivalMultiplier}倍（祭囃子のキャラは${CONFIG.mishaFestivalMultiplier}倍）になります。`,
   travel: '転移の魔法陣。止まると好きなマスへワープできます。始まりの門を越えると給料がもらえます。',
 };
@@ -897,6 +898,10 @@ export class View {
     // 特殊マスは効果の説明だけ
     if (sq.kind !== 'land' && sq.kind !== 'tourist') {
       if (SPECIAL_TEXT[sq.kind]) body.append(el('p', 'detail-desc', SPECIAL_TEXT[sq.kind]!));
+      if (sq.kind === 'island') {
+        const fee = escapeFeeOf(s, s.current);
+        body.append(el('p', 'detail-desc', `いまの手番の人の脱出料は ${fmt(fee)} です（総資産で変わります）。`));
+      }
       const here = s.players.filter((p) => !p.bankrupt && p.position === i);
       if (here.length) {
         body.append(el('p', 'detail-desc', `いまここにいる人：${here.map((p) => p.name).join('・')}`));
@@ -1488,9 +1493,10 @@ export class View {
         const wrap = el('div', 'panel');
         wrap.append(el('h3', '', '霧の孤島'));
         wrap.append(el('p', '', `あと最大${me.islandTurns}手番動けません。ゾロ目が出れば脱出できます。`));
-        const esc = el('button', 'btn', `${fmt(CONFIG.escapeFee)}払って出る`);
+        const fee = escapeFeeOf(s, me.id);
+        const esc = el('button', 'btn', `${fmt(fee)}払って出る`);
         const tryB = el('button', 'btn quiet', 'ゾロ目に挑戦');
-        esc.disabled = off || me.money < CONFIG.escapeFee;
+        esc.disabled = off || me.money < fee;
         tryB.disabled = off;
         esc.addEventListener('click', () => this.h.escape());
         tryB.addEventListener('click', () => this.h.roll());

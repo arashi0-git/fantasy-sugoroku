@@ -93,6 +93,14 @@ describe('性格ごとの判断', () => {
     expect(decideCpu(s, PERSONALITIES.bold, always(0))).toEqual({ type: 'payEscape' });
   });
 
+  it('積極派でも、脱出料を払ったあとの余裕がなければ居座る', () => {
+    const s = newGame(1);
+    s.players[0].money = 600;
+    s.players[0].position = ISLAND;
+    s.players[0].islandTurns = 3;
+    expect(decideCpu(s, PERSONALITIES.bold, always(0)).type).toBe('roll');
+  });
+
   it('積極派はゲージを狙わない', () => {
     const s = newGame(1);
     expect(decideCpu(s, PERSONALITIES.bold, always(0))).toEqual({ type: 'roll', aim: undefined });

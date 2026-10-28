@@ -20,6 +20,7 @@ import {
   buyoutPrice,
   completedGroups,
   createGame,
+  escapeFeeOf,
   GameError,
   GameState,
   investedValue,
@@ -390,11 +391,30 @@ describe('霧の孤島（無人島）', () => {
 
   it('脱出料を払えば、その手番で普通に振れる', () => {
     let s = onIsland();
+    const fee = escapeFeeOf(s, 0);
     s = applyAction(s, { type: 'payEscape' });
-    expect(s.players[0].money).toBe(3000 - CONFIG.escapeFee);
+    expect(s.players[0].money).toBe(3000 - fee);
     expect(s.players[0].islandTurns).toBe(0);
     s = rollTo(s, 13);
     expect(s.phase).toEqual({ kind: 'buy', square: 13 });
+  });
+
+  it('脱出料は総資産の10%（最低200G・上限なし、10G単位に丸める）', () => {
+    const s = newGame(1);
+    s.players[0].money = 500;
+    expect(escapeFeeOf(s, 0)).toBe(200); // 下限
+    s.players[0].money = 10000;
+    expect(escapeFeeOf(s, 0)).toBe(1000);
+    s.players[0].money = 12345;
+    expect(escapeFeeOf(s, 0)).toBe(1230); // 10G単位への丸め
+    s.players[0].money = 30000;
+    expect(escapeFeeOf(s, 0)).toBe(3000); // 上限なし
+  });
+
+  it('所持金が脱出料に足りないときは払って出られない', () => {
+    const s = onIsland();
+    s.players[0].money = 100;
+    expect(() => applyAction(s, { type: 'payEscape' })).toThrow(GameError);
   });
 });
 
