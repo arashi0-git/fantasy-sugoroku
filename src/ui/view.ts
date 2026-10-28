@@ -577,6 +577,16 @@ export class View {
    * 2Dでは出目は即座に確定表示になるため、待たない
    */
   async diceSettled(): Promise<void> {
+    if (!this.view3d) return;
+    if (!this.board3d && this.board3dLoading) {
+      // 3Dモジュールの読み込み中にロールが終わった場合、そのまま進めると
+      // 読み込み完了時に始まるセトルアニメーションの最中にコマが動き出してしまう。
+      // 読み込みを待ってから表示モードを再確認し、改めてセトルを待つ。
+      // 読み込み用プロミスは成功・失敗どちらの経路でも必ず解決する
+      // （失敗時は ensureBoard3d 側で握って2Dへ戻す）ため、ここで待ち続けにはならない。
+      // 描画が止まった場合の上限は whenDiceSettled 側のものが引き続き効く
+      await this.board3dLoading;
+    }
     if (this.view3d && this.board3d) await this.board3d.whenDiceSettled();
   }
 
