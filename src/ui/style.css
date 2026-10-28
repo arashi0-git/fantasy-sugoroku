@@ -1622,12 +1622,14 @@ button.hand-card:hover:not(:disabled) {
   border-color: var(--brass);
   font-weight: 700;
 }
-.sound-bar {
+/* ---------- 設定パネル（歯車ボタン＋オーバーレイ） ---------- */
+
+.settings-bar {
   display: flex;
   justify-content: flex-end;
   flex-shrink: 0;
 }
-.sound-bar button {
+.settings-gear {
   font-family: var(--font-ui);
   font-size: 12px;
   color: var(--on-table-soft);
@@ -1637,9 +1639,102 @@ button.hand-card:hover:not(:disabled) {
   padding: 3px 12px;
   cursor: pointer;
 }
-.sound-bar button[aria-pressed='true'] {
+.settings-gear:hover {
   color: var(--on-table);
   border-color: var(--on-table);
+}
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgb(10 14 30 / 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.settings-overlay[hidden] {
+  display: none;
+}
+.settings-box {
+  background: var(--table-deep);
+  color: var(--on-table);
+  width: min(100%, 400px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  border-radius: 14px;
+  border: 1px solid rgb(199 154 59 / 0.4);
+  padding: 16px 20px 20px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.settings-title {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+.settings-close {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--on-table-soft);
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.settings-close:hover {
+  color: var(--on-table);
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgb(199 154 59 / 0.18);
+}
+.settings-row .speed-label {
+  font-size: 13px;
+  white-space: nowrap;
+}
+.settings-sound {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--on-table-soft);
+  background: transparent;
+  border: 1px solid var(--on-table-soft);
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.settings-sound[aria-pressed='true'] {
+  color: #241a04;
+  background: var(--brass);
+  border-color: var(--brass);
+  font-weight: 700;
+}
+.settings-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+/* 横画面ではパネルが画面からはみ出さないよう余白を詰める */
+@media (orientation: landscape) and (max-height: 500px) {
+  .settings-overlay {
+    padding: 10px;
+  }
+  .settings-box {
+    max-height: calc(100dvh - 20px);
+    padding: 10px 16px 14px;
+  }
+  .settings-row {
+    padding: 8px 0;
+  }
 }
 .dock:empty {
   display: none;

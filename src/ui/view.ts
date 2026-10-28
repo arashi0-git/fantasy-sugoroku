@@ -115,6 +115,21 @@ export interface NavBarState {
   lockMeta: boolean;
 }
 
+/** 対戦速度の選択肢（待ち時間の計算は main が担う。保存キーは fs-speed） */
+export type SpeedMode = 'normal' | 'fast' | 'skip';
+
+/**
+ * 設定パネルから main 側の状態（対戦速度・効果音）を読み書きするための受け口。
+ * 見え方（カメラ・チルト）は View が持つが、速度と効果音の実体は main／sound 側にあるため、
+ * パネルの表示と操作はこの受け口越しに行う。
+ */
+export interface SettingsHooks {
+  getSpeed(): SpeedMode;
+  setSpeed(mode: SpeedMode): void;
+  getSound(): boolean;
+  setSound(on: boolean): void;
+}
+
 export interface ViewExtras {
   /** アニメーション中のコマの表示位置（プレイヤーID → マス） */
   shownPositions: number[];
@@ -304,33 +319,124 @@ export class View {
       this.boardEl.append(tile);
     }
     this.buildSheet();
-    this.buildTiltToggle();
+    this.buildSettings();
     this.buildRotateHint();
     this.buildTabBar();
     this.buildConfirmDialog();
     requestAnimationFrame(this.tickGauge);
   }
 
-  /** 盤面の見え方の切り替えボタン（速度バーの隣に作る）。「3D風」チルトと「カメラ」追尾は併用せず、どちらか一方だけが有効 */
-  private buildTiltToggle() {
-    const speedbar = document.getElementById('speedbar');
-    if (!speedbar?.parentElement) return;
-    const bar = el('div', 'speed-bar tilt-bar');
-    bar.setAttribute('role', 'group');
-    bar.setAttribute('aria-label', '盤面の見え方');
-    const tiltBtn = el('button', 'tilt-btn', '3D風');
-    tiltBtn.type = 'button';
+  // ---- 設定パネル（対戦速度・見え方・効果音を歯車ボタンからのパネルに集約する） ----
+  private settingsEl!: HTMLElement;
+  private settingsHooks: SettingsHooks | null = null;
+  /** 設定パネルの見た目を現在の状態に合わせる（buildSettings が設定する） */
+  private syncSettings: (() => void) | null = null;
+
+  /** 設定パネルから main 側の状態（対戦速度・効果音）を読み書きする受け口を登録する */
+  setSettingsHooks(h: SettingsHooks) {
+    this.settingsHooks = h;
+    this.syncSettings?.();
+  }
+
+  /**
+   * 歯車ボタンと設定パネルを作る。歯車は横の列のいちばん上に常時出し、
+   * パネルには対戦速度／見え方（カメラ・チルト）／効果音をまとめる。
+   * 「3D風」チルトと「カメラ」追尾は併用せず、どちらか一方だけが有効（従来どおり）。
+   * パネルは確認ダイアログと違い、開いている間も対戦はそのまま進む。
+   */
+  private buildSettings() {
+    const side = this.dockEl.parentElement;
+    if (!side) return;
+    const bar = el('div', 'settings-bar');
+    const gear = el('button', 'settings-gear', '⚙ 設定');
+    gear.type = 'button';
+    gear.setAttribute('aria-haspopup', 'dialog');
+    gear.addEventListener('click', () => this.openSettings());
+    bar.append(gear);
+    side.insertBefore(bar, side.firstChild);
+
+    // パネルの土台（確認ダイアログと同じオーバーレイ方式）
+    const overlay = el('div', 'settings-overlay');
+    overlay.hidden = true;
+    const box = el('section', 'settings-box');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-label', '設定');
+    const head = el('div', 'settings-head');
+    head.append(el('h3', 'settings-title', '設定'));
+    const closeBtn = el('button', 'settings-close', '✕');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', '設定を閉じる');
+    closeBtn.addEventListener('click', () => this.closeSettings());
+    head.append(closeBtn);
+    box.append(head);
+
+    // 対戦速度（選択肢は従来の速度バーと同じ3つ。実体は main が受け口越しに持つ）
+    const speedBtns = new Map<SpeedMode, HTMLButtonElement>();
+    const speedGroup = el('div', 'speed-bar');
+    speedGroup.setAttribute('role', 'group');
+    speedGroup.setAttribute('aria-label', '対戦速度');
+    const speedChoices: [SpeedMode, string][] = [
+      ['normal', 'ふつう'],
+      ['fast', '速い'],
+      ['skip', 'スキップ'],
+    ];
+    for (const [mode, label] of speedChoices) {
+      const b = el('button', '', label);
+      b.type = 'button';
+      b.addEventListener('click', () => {
+        this.settingsHooks?.setSpeed(mode);
+        this.syncSettings?.();
+      });
+      speedBtns.set(mode, b);
+      speedGroup.append(b);
+    }
+    const speedRow = el('div', 'settings-row');
+    speedRow.append(el('span', 'speed-label', '対戦速度'), speedGroup);
+    box.append(speedRow);
+
+    // 見え方（カメラ追尾／3D風チルト）
     const camBtn = el('button', 'tilt-btn', 'カメラ');
     camBtn.type = 'button';
     camBtn.title = 'カメラ追尾：手番の人のコマを中心に、盤面を拡大して追いかけます';
-    const sync = () => {
-      const tilt = document.body.classList.contains('tilt-on');
-      tiltBtn.classList.toggle('active', tilt);
-      tiltBtn.setAttribute('aria-pressed', String(tilt));
-      camBtn.classList.toggle('active', this.cameraOn);
-      camBtn.setAttribute('aria-pressed', String(this.cameraOn));
-    };
-    this.syncViewBar = sync;
+    const tiltBtn = el('button', 'tilt-btn', '3D風');
+    tiltBtn.type = 'button';
+    tiltBtn.title = '3D風：盤面を少し傾けて立体感を出します（カメラ追尾とは同時には使えません）';
+    const viewGroup = el('div', 'speed-bar');
+    viewGroup.setAttribute('role', 'group');
+    viewGroup.setAttribute('aria-label', '盤面の見え方');
+    viewGroup.append(camBtn, tiltBtn);
+    const viewRow = el('div', 'settings-row');
+    viewRow.append(el('span', 'speed-label', '見え方'), viewGroup);
+    box.append(viewRow);
+
+    // 効果音（実体は sound 側が受け口越しに持つ）
+    const soundBtn = el('button', 'settings-sound', '');
+    soundBtn.type = 'button';
+    soundBtn.addEventListener('click', () => {
+      this.settingsHooks?.setSound(!(this.settingsHooks?.getSound() ?? true));
+      this.syncSettings?.();
+    });
+    const soundRow = el('div', 'settings-row');
+    soundRow.append(el('span', 'speed-label', '効果音'), soundBtn);
+    box.append(soundRow);
+
+    const foot = el('div', 'settings-foot');
+    const done = el('button', 'btn quiet', '閉じる');
+    done.type = 'button';
+    done.addEventListener('click', () => this.closeSettings());
+    foot.append(done);
+    box.append(foot);
+
+    overlay.append(box);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.closeSettings();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !overlay.hidden) this.closeSettings();
+    });
+    document.body.append(overlay);
+    this.settingsEl = overlay;
+
     const setTilt = (on: boolean) => {
       document.body.classList.toggle('tilt-on', on);
       try {
@@ -339,6 +445,23 @@ export class View {
         /* 保存できなくても切り替え自体は有効 */
       }
     };
+    const sync = () => {
+      const speed = this.settingsHooks?.getSpeed() ?? 'normal';
+      for (const [mode, b] of speedBtns) {
+        const active = mode === speed;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-pressed', String(active));
+      }
+      const tilt = document.body.classList.contains('tilt-on');
+      tiltBtn.classList.toggle('active', tilt);
+      tiltBtn.setAttribute('aria-pressed', String(tilt));
+      camBtn.classList.toggle('active', this.cameraOn);
+      camBtn.setAttribute('aria-pressed', String(this.cameraOn));
+      const sound = this.settingsHooks?.getSound() ?? true;
+      soundBtn.textContent = sound ? '🔊 オン' : '🔇 オフ';
+      soundBtn.setAttribute('aria-pressed', String(sound));
+    };
+    this.syncSettings = sync;
     try {
       // 両方とも保存されていたら、カメラを優先する（併用はしない仕様）
       if (window.localStorage.getItem('fs-cam') === '1') this.setCamera(true);
@@ -358,17 +481,24 @@ export class View {
       this.setCamera(on);
       sync();
     });
-    bar.append(el('span', 'speed-label', '見え方'), tiltBtn, camBtn);
-    speedbar.after(bar);
     sync();
+  }
+
+  /** 設定パネルを開く（開くたびに現在の状態へ表示を合わせる） */
+  private openSettings() {
+    this.syncSettings?.();
+    this.settingsEl.hidden = false;
+  }
+
+  /** 設定パネルを閉じる */
+  private closeSettings() {
+    this.settingsEl.hidden = true;
   }
 
   // ---- カメラ追尾モード ----
   /** カメラの拡大倍率（全体表示の約2倍のマスになる） */
   private static readonly CAMERA_SCALE = 2;
   private cameraOn = false;
-  /** 見え方バーの見た目を現在の状態に合わせる（buildTiltToggle が設定する） */
-  private syncViewBar: (() => void) | null = null;
   /** カメラがいま中央に置いているマス（変わったら自由視点のずれをリセットする） */
   private camSquare = -1;
   /** ドラッグでずらした自由視点のずれ（px）。次のコマ移動で自動的に追尾へ戻る */
@@ -404,7 +534,7 @@ export class View {
     }
     // パネルの置き場所（中央か横の列か）がカメラの有無で変わるので、描き直して追いつかせる
     if (this.last) this.render(...this.last);
-    this.syncViewBar?.();
+    this.syncSettings?.();
   }
 
   /**
