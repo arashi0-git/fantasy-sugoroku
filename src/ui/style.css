@@ -1717,6 +1717,20 @@ button.hand-card:hover:not(:disabled) {
   border-color: var(--brass);
   font-weight: 700;
 }
+/* 設定行の右側（ボタン群＋注記を縦に並べる） */
+.settings-right {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+.settings-note {
+  font-size: 11px;
+  color: var(--on-table-soft);
+}
+.speed-bar button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
 .settings-foot {
   display: flex;
   justify-content: flex-end;
@@ -2526,6 +2540,46 @@ body.cam-on .board.shake {
   body.cam-on .board {
     transition: none;
   }
+}
+
+/* ---------- 3D盤面モード（Three.js） ---------- */
+
+/* 3Dキャンバスの置き場所。2D盤面と同じ大きさで、盤面の下に敷く */
+.board-view {
+  position: relative;
+}
+.board-3d {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.board-3d[hidden] {
+  display: none;
+}
+.board-3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+.board-3d-canvas:active {
+  cursor: grabbing;
+}
+/* 3D表示中は2Dのマスだけを消し、中央の情報（サイコロ・手番表示）はキャンバスの上に残す。
+   盤面全体はクリックを通すので、下のキャンバスがマスのタップとドラッグを受け取る。
+   操作パネル類は横の列に出る（カメラモードと同じ扱い） */
+body.view-3d .board {
+  z-index: 1;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+  /* 2Dカメラやチルトの transform で中央表示がずれないようにする */
+  transform: none !important;
+}
+body.view-3d .tile {
+  visibility: hidden;
 }
 
 /* ---------- 縦向きのときの横画面案内 ---------- */
