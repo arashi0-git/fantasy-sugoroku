@@ -9,6 +9,7 @@ import { GameReward, levelOf, ownsChar, Profile, unownedChars, xpProgress } from
 import { COSMETIC_KIND_NAMES, COSMETIC_LIST, CosmeticKind, cosmeticById } from '../meta/cosmetics';
 import { GachaResult, isRareResult, PITY_LIMIT } from '../meta/gacha';
 import { grownStats } from '../meta/growth';
+import type { Board3D } from './board3d';
 import {
   Action,
   actorOf,
@@ -207,8 +208,8 @@ const SPECIAL_TEXT: Partial<Record<SquareKind, string>> = {
 /** プレイヤーのコマ（チェスのポーン型）。色は --c を使う */
 const PAWN_SVG = `<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="21.7" rx="6.2" ry="1.6" fill="rgba(0,0,0,.28)"/><path d="M12 2.6a3.4 3.4 0 1 1 0 6.8 3.4 3.4 0 0 1 0-6.8Z" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><path d="M8.6 10.2h6.8l.7 2.3H7.9Z" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><path d="M9.2 12.5c.5 2.9-.4 4.7-2 6.3h9.6c-1.6-1.6-2.5-3.4-2-6.3Z" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><rect x="5.6" y="18.4" width="12.8" height="2.7" rx="1.3" fill="var(--c)" stroke="rgba(255,255,255,.9)" stroke-width="1.1"/><ellipse cx="10.4" cy="5" rx="1.5" ry="1" fill="rgba(255,255,255,.4)"/></svg>`;
 
-/** マス番号 → 9×9 グリッド上の位置と、盤の内側を向く辺 */
-function placement(i: number): { row: number; col: number; side: 'bottom' | 'left' | 'top' | 'right' } {
+/** マス番号 → 9×9 グリッド上の位置と、盤の内側を向く辺（3D盤面も同じ配置を使う） */
+export function placement(i: number): { row: number; col: number; side: 'bottom' | 'left' | 'top' | 'right' } {
   if (i <= 8) return { row: 9, col: 9 - i, side: 'bottom' };
   if (i <= 16) return { row: 9 - (i - 8), col: 1, side: 'left' };
   if (i <= 24) return { row: 1, col: 1 + (i - 16), side: 'top' };
@@ -277,6 +278,11 @@ export class View {
     const boardView = el('div', 'board-view');
     this.boardEl.parentElement?.insertBefore(boardView, this.boardEl);
     boardView.append(this.boardEl);
+    // 3D盤面の置き場所（2D盤面の下に敷き、3D表示のときだけ2Dのマスを消して見せる）
+    const holder3d = el('div', 'board-3d');
+    holder3d.hidden = true;
+    boardView.append(holder3d);
+    this.board3dHolder = holder3d;
     this.initCameraDrag();
     // 盤面の大きさが変わったら、パネルの置き場所を決め直して描き直す
     new ResizeObserver(() => {
@@ -340,7 +346,7 @@ export class View {
 
   /**
    * 歯車ボタンと設定パネルを作る。歯車は横の列のいちばん上に常時出し、
-   * パネルには対戦速度／見え方（カメラ・チルト）／効果音をまとめる。
+   * パネルには対戦速度／見え方（カメラ・チルト）／効果音／表示（2D・3D）をまとめる。
    * 「3D風」チルトと「カメラ」追尾は併用せず、どちらか一方だけが有効（従来どおり）。
    * パネルは確認ダイアログと違い、開いている間も対戦はそのまま進む。
    */
@@ -405,8 +411,13 @@ export class View {
     viewGroup.setAttribute('role', 'group');
     viewGroup.setAttribute('aria-label', '盤面の見え方');
     viewGroup.append(camBtn, tiltBtn);
+    // 3D表示の間は見え方（2D盤面のカメラ・チルト）は使えない。その理由を注記する
+    const viewNote = el('span', 'settings-note', '3D表示中は自動カメラになります');
+    viewNote.hidden = true;
+    const viewRight = el('div', 'settings-right');
+    viewRight.append(viewGroup, viewNote);
     const viewRow = el('div', 'settings-row');
-    viewRow.append(el('span', 'speed-label', '見え方'), viewGroup);
+    viewRow.append(el('span', 'speed-label', '見え方'), viewRight);
     box.append(viewRow);
 
     // 効果音（実体は sound 側が受け口越しに持つ）
@@ -419,6 +430,30 @@ export class View {
     const soundRow = el('div', 'settings-row');
     soundRow.append(el('span', 'speed-label', '効果音'), soundBtn);
     box.append(soundRow);
+
+    // 表示（2D／3D盤面の切り替え。3Dは Three.js の盤面で、カメラは手番のコマを自動で追う）
+    const dispBtns = new Map<'2d' | '3d', HTMLButtonElement>();
+    const dispGroup = el('div', 'speed-bar');
+    dispGroup.setAttribute('role', 'group');
+    dispGroup.setAttribute('aria-label', '盤面の表示');
+    const dispChoices: ['2d' | '3d', string][] = [
+      ['2d', '2D'],
+      ['3d', '3D'],
+    ];
+    for (const [mode, label] of dispChoices) {
+      const b = el('button', '', label);
+      b.type = 'button';
+      if (mode === '3d') b.title = '3D表示：盤面を立体で表示します（読み込みに少し時間がかかります）';
+      b.addEventListener('click', () => {
+        this.setViewMode(mode);
+        this.syncSettings?.();
+      });
+      dispBtns.set(mode, b);
+      dispGroup.append(b);
+    }
+    const dispRow = el('div', 'settings-row');
+    dispRow.append(el('span', 'speed-label', '表示'), dispGroup);
+    box.append(dispRow);
 
     const foot = el('div', 'settings-foot');
     const done = el('button', 'btn quiet', '閉じる');
@@ -457,6 +492,15 @@ export class View {
       tiltBtn.setAttribute('aria-pressed', String(tilt));
       camBtn.classList.toggle('active', this.cameraOn);
       camBtn.setAttribute('aria-pressed', String(this.cameraOn));
+      // 3D表示の間、見え方（2D盤面のカメラ・チルト）は無効。押せないようにして注記を出す
+      camBtn.disabled = this.view3d;
+      tiltBtn.disabled = this.view3d;
+      viewNote.hidden = !this.view3d;
+      for (const [mode, b] of dispBtns) {
+        const active = (mode === '3d') === this.view3d;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-pressed', String(active));
+      }
       const sound = this.settingsHooks?.getSound() ?? true;
       soundBtn.textContent = sound ? '🔊 オン' : '🔇 オフ';
       soundBtn.setAttribute('aria-pressed', String(sound));
@@ -466,6 +510,8 @@ export class View {
       // 両方とも保存されていたら、カメラを優先する（併用はしない仕様）
       if (window.localStorage.getItem('fs-cam') === '1') this.setCamera(true);
       else if (window.localStorage.getItem('fs-tilt') === '1') document.body.classList.add('tilt-on');
+      // 表示モードの復元（既定は2D）
+      if (window.localStorage.getItem('fs-view') === '3d') this.setViewMode('3d');
     } catch {
       /* 保存できない環境では初期値オフのまま */
     }
@@ -495,9 +541,65 @@ export class View {
     this.settingsEl.hidden = true;
   }
 
+  // ---- 3D盤面モード（Three.js） ----
+  /** 3D表示かどうか。保存キーは fs-view（'3d' のときだけ3D、既定は2D） */
+  private view3d = false;
+  /** 3D盤面の置き場所（コンストラクタで .board-view の中に作る） */
+  private board3dHolder!: HTMLElement;
+  /** 3D盤面の本体。3D表示を初めて選んだときに動的 import で読み込む */
+  private board3d: Board3D | null = null;
+  private board3dLoading: Promise<void> | null = null;
+
+  /**
+   * 盤面の表示（2D／3D）を切り替える。
+   * 3D表示の間、2D側のカメラ追尾・チルトは無効として扱う（保存値はそのまま残し、2Dに戻すと復活する）。
+   * 3D側のカメラは手番のコマを自動で追うので、設定が矛盾することはない。
+   */
+  private setViewMode(mode: '2d' | '3d') {
+    const on = mode === '3d';
+    this.view3d = on;
+    document.body.classList.toggle('view-3d', on);
+    this.board3dHolder.hidden = !on;
+    try {
+      window.localStorage.setItem('fs-view', on ? '3d' : '2d');
+    } catch {
+      /* 保存できなくても切り替え自体は有効 */
+    }
+    if (on) this.ensureBoard3d();
+    else this.board3d?.setActive(false);
+    if (this.last) this.render(...this.last);
+    this.syncSettings?.();
+  }
+
+  /** 3D盤面モジュールを読み込んで用意する（読み込めなければ2Dに戻す） */
+  private ensureBoard3d() {
+    if (this.board3d) {
+      this.board3d.setActive(true);
+      return;
+    }
+    if (this.board3dLoading) return;
+    this.board3dLoading = (async () => {
+      try {
+        const { Board3D } = await import('./board3d');
+        this.board3d = new Board3D(
+          this.board3dHolder,
+          BOARD.map((sq) => placement(sq.index)),
+          (i) => this.tapSquare(i),
+        );
+        if (this.view3d) {
+          this.board3d.setActive(true);
+          if (this.last) this.render(...this.last);
+        }
+      } catch {
+        this.board3dLoading = null;
+        if (this.view3d) this.setViewMode('2d');
+      }
+    })();
+  }
+
   // ---- カメラ追尾モード ----
-  /** カメラの拡大倍率（全体表示の約2倍のマスになる） */
-  private static readonly CAMERA_SCALE = 2;
+  /** カメラの拡大倍率。2倍だと寄りすぎて盤面の情報が見えにくいという声があり、1.6倍に弱めた */
+  private static readonly CAMERA_SCALE = 1.6;
   private cameraOn = false;
   /** カメラがいま中央に置いているマス（変わったら自由視点のずれをリセットする） */
   private camSquare = -1;
@@ -725,6 +827,11 @@ export class View {
     });
   }
 
+  /** 3D盤面など、DOMのマスの外からマスが選ばれたときの入口（扱いはタイルのタップと同じ） */
+  tapSquare(i: number) {
+    this.tapTile(i);
+  }
+
   /** マスをタップしたとき：対象選択中ならそちらを優先し、それ以外は詳細シートを開く */
   private tapTile(i: number) {
     if (this.tiles[i].classList.contains('selectable')) {
@@ -818,7 +925,18 @@ export class View {
     this.renderLog(s, x);
     if (this.detailSquare !== null) this.refreshDetail(s);
     // カメラモードでは、手番の人のコマに盤面を追従させる（コマの移動アニメーションのたびに呼ばれる）
-    if (this.cameraOn) this.applyCamera(s, x);
+    // 3D表示の間は2Dカメラは使わない（3D側のカメラが追従する）
+    if (this.cameraOn && !this.view3d) this.applyCamera(s, x);
+    // 3D表示では、DOMタイルに付けた選択可否・強調をそのまま3D側へ渡して同期する
+    if (this.view3d && this.board3d) {
+      const selectable = new Set<number>();
+      let highlight = -1;
+      this.tiles.forEach((t, i) => {
+        if (t.classList.contains('selectable')) selectable.add(i);
+        if (t.classList.contains('highlight')) highlight = i;
+      });
+      this.board3d.sync(s, x.shownPositions, { selectable, highlight });
+    }
   }
 
   /** 手札のカードを使う。対象が必要なカードは、対象選びの画面にする */
@@ -1132,9 +1250,9 @@ export class View {
     c.replaceChildren();
     this.dockEl.replaceChildren();
     // お知らせと操作パネルの置き場所：盤面が大きければ中央、小さければ横の列（スマホでは盤面の下）。
-    // カメラモードでは盤面の中央が画角の外に出ることがあるので、常に横の列に出す
+    // カメラモード・3D表示では盤面の中央が見えないことがあるので、常に横の列に出す
     this.compact = this.boardEl.clientWidth < View.COMPACT_BOARD;
-    const host = this.compact || this.cameraOn ? this.dockEl : c;
+    const host = this.compact || this.cameraOn || this.view3d ? this.dockEl : c;
     c.append(el('h1', 'title', 'ファンタジーすごろく'));
     c.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
@@ -1159,9 +1277,9 @@ export class View {
     c.append(this.dice(x));
 
     // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）。
-    // カメラモードでは盤面の中央が見えないことがあるので、出来事の帯も横の列に出す
+    // カメラモード・3D表示では盤面の中央が見えないことがあるので、出来事の帯も横の列に出す
     const banner = this.eventBanner(s, x);
-    if (banner) (this.cameraOn ? host : c).append(banner);
+    if (banner) (this.cameraOn || this.view3d ? host : c).append(banner);
 
     // CPU の一言（演出中も出す）
     // カードの結果が同じ人のものなら、吹き出しの下にまとめて場所を節約する

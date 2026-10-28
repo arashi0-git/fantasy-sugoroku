@@ -10,11 +10,15 @@
     "tune": "TUNE=1 vitest run --silent=false"
   },
   "devDependencies": {
+    "@types/three": "^0.186.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vite-plugin-singlefile": "^2.3.4",
     "vitest": "^5.0.5"
   },
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "three": "^0.186.1"
+  }
 }
