@@ -1532,6 +1532,12 @@ export class View {
           if (this.last) this.render(...this.last);
         });
         actions.append(f);
+      } else if (hasTrait(me, 'skyride') && me.skyUses === 0 && me.laps < 1) {
+        // 初回の天翔は1周するまで解放されないことを伝える
+        const f = el('button', 'btn quiet', '天翔（1周すると解放）');
+        f.disabled = true;
+        f.title = '初回の天翔は、盤面を1周してから使えます';
+        actions.append(f);
       }
       // 土地の取引：相手に土地を持っている人がいるときだけ出せる
       const tradeTargets = s.players.filter((p) => p.id !== me.id && !p.bankrupt && ownedSquares(s, p.id).length > 0);
