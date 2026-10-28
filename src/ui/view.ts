@@ -549,6 +549,13 @@ export class View {
   /** 3D盤面の本体。3D表示を初めて選んだときに動的 import で読み込む */
   private board3d: Board3D | null = null;
   private board3dLoading: Promise<void> | null = null;
+  /**
+   * 読み込み待ちがタイムアウトした印。盤面が遅れて生成されたとき、
+   * 消費済みロールの出目をアニメーションなしで表示するために使う
+   */
+  private board3dSnapDice = false;
+  /** 読み込み待ちが一度タイムアウトした印。以後のロールでは同じ読み込みを待たない */
+  private board3dLoadTimedOut = false;
 
   /**
    * 盤面の表示（2D／3D）を切り替える。
@@ -578,16 +585,37 @@ export class View {
    */
   async diceSettled(): Promise<void> {
     if (!this.view3d) return;
-    if (!this.board3d && this.board3dLoading) {
+    if (!this.board3d && this.board3dLoading && !this.board3dLoadTimedOut) {
       // 3Dモジュールの読み込み中にロールが終わった場合、そのまま進めると
       // 読み込み完了時に始まるセトルアニメーションの最中にコマが動き出してしまう。
       // 読み込みを待ってから表示モードを再確認し、改めてセトルを待つ。
-      // 読み込み用プロミスは成功・失敗どちらの経路でも必ず解決する
-      // （失敗時は ensureBoard3d 側で握って2Dへ戻す）ため、ここで待ち続けにはならない。
-      // 描画が止まった場合の上限は whenDiceSettled 側のものが引き続き効く
-      await this.board3dLoading;
+      // ただし読み込みには上限を設ける：接続が止まったままだと import は
+      // 成功も失敗もせず、手番が無期限に止まる（ソフトロック）ため。
+      // 超えたら、この読み込みは以後待たず、そのロールは2Dとして進める
+      const loaded = await View.withTimeout(this.board3dLoading, View.BOARD3D_LOAD_WAIT_MS);
+      if (!loaded) {
+        this.board3dLoadTimedOut = true;
+        // 遅れて盤面が生成されても、消費済みロールのセトルを再生しないよう印を付ける
+        if (!this.board3d) this.board3dSnapDice = true;
+      }
     }
     if (this.view3d && this.board3d) await this.board3d.whenDiceSettled();
+  }
+
+  /**
+   * 3Dモジュール読み込み待ちの上限（ms）。
+   * チャンク（three.js込み）は gzip で約140KB。低速回線（400kbps級）でも
+   * 約3秒で届く計算で、これを超えたら「遅い」ではなく「止まった」とみなす。
+   * セトルの見栄えより、手番が止まらないことを優先するための上限
+   */
+  private static readonly BOARD3D_LOAD_WAIT_MS = 3000;
+
+  /** プロミスが ms 以内に解決すれば true、超えたら false（プロミス自体は止めない） */
+  private static withTimeout(p: Promise<void>, ms: number): Promise<boolean> {
+    return Promise.race([
+      p.then(() => true),
+      new Promise<boolean>((r) => setTimeout(() => r(false), ms)),
+    ]);
   }
 
   /** 3D盤面モジュールを読み込んで用意する（読み込めなければ2Dに戻す） */
@@ -597,6 +625,7 @@ export class View {
       return;
     }
     if (this.board3dLoading) return;
+    this.board3dLoadTimedOut = false;
     this.board3dLoading = (async () => {
       try {
         const { Board3D } = await import('./board3d');
@@ -605,6 +634,14 @@ export class View {
           BOARD.map((sq) => placement(sq.index)),
           (i) => this.tapSquare(i),
         );
+        // 読み込み待ちがタイムアウトしたロールがある場合、その出目は
+        // アニメーションなしで表示する（終わったロールのセトルを遅れて再生しない）。
+        // ロール中なら印だけ消し、生きたロールの演出に任せる
+        if (this.board3dSnapDice) {
+          this.board3dSnapDice = false;
+          const x = this.last?.[1];
+          if (x && !x.rolling && x.dice) this.board3d.snapDice(x.dice);
+        }
         if (this.view3d) {
           this.board3d.setActive(true);
           if (this.last) this.render(...this.last);

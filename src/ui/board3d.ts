@@ -661,6 +661,21 @@ export class Board3D {
   }
 
   /**
+   * サイコロの出目をアニメーションなしで即座に表示する。
+   * 読み込み待ちのタイムアウト等で既に終わったロールのセトル演出を、
+   * 遅れて生成された盤面で再生しないために使う
+   */
+  snapDice(values: [number, number]) {
+    this.diceTumbling = false;
+    this.diceShown = [values[0], values[1]];
+    this.dice.forEach((die, i) => {
+      this.diceAnim[i] = null;
+      die.quaternion.copy(quatForTop(values[i]));
+    });
+    this.flushDiceSettleWaiters(true);
+  }
+
+  /**
    * サイコロの演出（転がし＋止まるアニメーション）が終わるまで待つ。
    * どちらも進行中でなければ即座に解決する。描画が止まって進まない場合に
    * ゲーム全体が止まらないよう、時間の上限でも解決する
