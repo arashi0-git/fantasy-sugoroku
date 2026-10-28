@@ -149,7 +149,7 @@ export const CHARACTERS: Record<CharacterId, Character> = {
     title: '竜騎士',
     color: '#c4513b',
     stats: { income: 2, build: 3, deal: 3, prestige: 3, luck: 4 },
-    trait: { id: 'skyride', name: '天翔', text: '2周に1回、300G払ってサイコロの代わりに好きなマスへ飛べる（始まりの門を越えれば給料）' },
+    trait: { id: 'skyride', name: '天翔', text: '1周した後から、2周に1回、300G払ってサイコロの代わりに好きなマスへ飛べる（始まりの門を越えれば給料）' },
     personality: 'schemer',
   },
   verre: {

@@ -1069,6 +1069,7 @@ describe('キャラクター：固有特性', () => {
 
   it('天翔（ガルム）：好きなマスへ飛べ、2周するまでは次を使えない', () => {
     let s = charGame(['garm']);
+    s.players[0].laps = 1; // 初回は1周してから解放される
     expect(canFly(s)).toBe(true);
     s = applyAction(s, { type: 'fly', square: 13 });
     expect(s.players[0].position).toBe(13);
@@ -1081,6 +1082,7 @@ describe('キャラクター：固有特性', () => {
 
   it('天翔（ガルム）：始まりの門を越えて飛ぶと給料が出て、しばらくは飛べない', () => {
     let s = charGame(['garm']);
+    s.players[0].laps = 1; // 初回は1周してから解放される
     s.players[0].position = 20;
     [1, 2, 3].forEach((i) => (s.players[i].money = 0)); // ガルムを首位にして、最下位の2倍がかからないように
     s = applyAction(s, { type: 'fly', square: 5 });
@@ -1091,6 +1093,41 @@ describe('キャラクター：固有特性', () => {
   it('天翔はキャラが違えば使えない', () => {
     const s = charGame(['bald']);
     expect(() => applyAction(s, { type: 'fly', square: 5 })).toThrow(GameError);
+  });
+
+  it('天翔（ガルム）：初回は1周するまで使えず、2回目は従来どおり2周に1回', () => {
+    let s = charGame(['garm']);
+    // 0周では使えない
+    expect(s.players[0].laps).toBe(0);
+    expect(canFly(s)).toBe(false);
+    expect(() => applyAction(s, { type: 'fly', square: 13 })).toThrow(GameError);
+    // 1周完了で解放される
+    s.players[0].laps = 1;
+    expect(canFly(s)).toBe(true);
+    s = applyAction(s, { type: 'fly', square: 13 });
+    expect(s.players[0].skyUses).toBe(1);
+    s = applyAction(s, { type: 'pass' });
+    for (let i = 0; i < 3; i++) s = applyAction(rollTo(s, 5), { type: 'pass' });
+    expect(s.current).toBe(0);
+    expect(canFly(s)).toBe(false);
+    // 始まりの門を1回通過しても、まだ戻らない
+    s.players[0].position = 30;
+    s = rollTo(s, 2);
+    if (s.phase.kind === 'adjust') s = applyAction(s, { type: 'adjust', delta: 0 }); // 追い風の羽を持っていたら使わない
+    if (s.phase.kind === 'buy') s = applyAction(s, { type: 'pass' });
+    for (let i = 0; i < 3; i++) s = applyAction(rollTo(s, 10), { type: 'pass' });
+    expect(s.current).toBe(0);
+    expect(s.players[0].skyUsed).toBe(true);
+    expect(canFly(s)).toBe(false);
+    // 2回目の通過で戻り、初回ゲート（未使用でなければ）にはかからない
+    s.players[0].position = 30;
+    s = rollTo(s, 2);
+    if (s.phase.kind === 'adjust') s = applyAction(s, { type: 'adjust', delta: 0 }); // 追い風の羽を持っていたら使わない
+    if (s.phase.kind === 'buy') s = applyAction(s, { type: 'pass' });
+    for (let i = 0; i < 3; i++) s = applyAction(rollTo(s, 15), { type: 'pass' });
+    expect(s.current).toBe(0);
+    expect(s.players[0].skyUsed).toBe(false);
+    expect(canFly(s)).toBe(true);
   });
 });
 

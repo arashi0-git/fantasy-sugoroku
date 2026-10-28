@@ -33,6 +33,8 @@ export interface Player {
   skyUsed: boolean;
   /** 天翔を使ってから通過した始まりの門の数 */
   skyLaps: number;
+  /** 天翔を使った回数（初回は盤面を1周してからでないと使えない） */
+  skyUses: number;
   /** 秘密の使命（本人にしか見えない前提。達成すると公開） */
   mission: MissionId | null;
   missionDone: boolean;
@@ -293,6 +295,7 @@ export function createGame(players: PlayerSetup[], seed = Date.now()): GameState
       statsOverride: p.stats ?? null,
       skyUsed: false,
       skyLaps: 0,
+      skyUses: 0,
       mission: null,
       missionDone: false,
       record: { buyouts: 0, rentIn: 0 },
@@ -697,9 +700,10 @@ export function raidTargets(state: GameState): number[] {
     .sort((a, b) => a - b);
 }
 
-/** 天翔を今使えるか */
+/** 天翔を今使えるか。初回だけは、盤面を1周（始まりの門の通過＝給料の受け取り）してから */
 export function canFly(state: GameState): boolean {
   const p = state.players[state.current];
+  if (p.skyUses === 0 && p.laps < 1) return false;
   return (
     state.phase.kind === 'roll' && hasTrait(p, 'skyride') && !p.skyUsed && p.islandTurns === 0 && p.money >= CONFIG.skyrideCost
   );
@@ -1724,6 +1728,7 @@ function fly(s: GameState, square: number) {
   warpForward(s, square);
   p.skyUsed = true; // 始まりの門を越えて戻った分も、この周で使ったことにする
   p.skyLaps = 0;
+  p.skyUses += 1;
   log(s, p.id, `天翔で ${BOARD[square].name} へ飛んだ`);
   resolveSquare(s);
 }
