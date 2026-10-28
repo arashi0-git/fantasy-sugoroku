@@ -392,6 +392,8 @@ export class Board3D {
   private diceTumbling = false;
   /** 出目が確定した後の「止まる」アニメーション（サイコロごと） */
   private diceAnim: ({ from: THREE.Quaternion; final: THREE.Quaternion; axis: THREE.Vector3; turns: number; t0: number } | null)[] = [null, null];
+  /** サイコロの演出が終わるのを待っている側（main がコマ移動の開始を遅らせるために使う） */
+  private diceSettleWaiters: (() => void)[] = [];
   private follow = new THREE.Vector3();
   /** カメラの距離（狭い画面では resize で引き延ばす。通常は CAM_DIST） */
   private dist = CAM_DIST;
@@ -453,8 +455,18 @@ export class Board3D {
       group.add(top);
       this.pickMeshes.push(top);
 
-      // 所有者の枠（所有されたらマスの縁に持ち主色の板を出す）
-      const frame = box(TILE + 0.12, 0.05, TILE + 0.12, mat('#ffffff'), 0, TILE_H + 0.026, 0);
+      // 所有者の枠（所有されたらマスの縁に持ち主色の板を出す）。
+      // 色は sync でマスごとに所有者色へ差し替えるため、共有キャッシュ（mat）の
+      // マテリアルを使うと全マスの色が最後に書いた色へ揃ってしまう。必ず専用にする
+      const frame = box(
+        TILE + 0.12,
+        0.05,
+        TILE + 0.12,
+        new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.85, metalness: 0.05 }),
+        0,
+        TILE_H + 0.026,
+        0,
+      );
       frame.visible = false;
       group.add(frame);
 
@@ -548,6 +560,8 @@ export class Board3D {
       this.raf = requestAnimationFrame(loop);
     } else {
       cancelAnimationFrame(this.raf);
+      // 描画が止まるとアニメーションも止まるので、待っている側は解放する
+      this.flushDiceSettleWaiters(true);
     }
   }
 
@@ -646,6 +660,46 @@ export class Board3D {
     });
   }
 
+  /**
+   * サイコロの出目をアニメーションなしで即座に表示する。
+   * 読み込み待ちのタイムアウト等で既に終わったロールのセトル演出を、
+   * 遅れて生成された盤面で再生しないために使う
+   */
+  snapDice(values: [number, number]) {
+    this.diceTumbling = false;
+    this.diceShown = [values[0], values[1]];
+    this.dice.forEach((die, i) => {
+      this.diceAnim[i] = null;
+      die.quaternion.copy(quatForTop(values[i]));
+    });
+    this.flushDiceSettleWaiters(true);
+  }
+
+  /**
+   * サイコロの演出（転がし＋止まるアニメーション）が終わるまで待つ。
+   * どちらも進行中でなければ即座に解決する。描画が止まって進まない場合に
+   * ゲーム全体が止まらないよう、時間の上限でも解決する
+   */
+  whenDiceSettled(): Promise<void> {
+    if (!this.diceTumbling && this.diceAnim.every((a) => a === null)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiter = () => resolve();
+      this.diceSettleWaiters.push(waiter);
+      setTimeout(() => {
+        this.diceSettleWaiters = this.diceSettleWaiters.filter((w) => w !== waiter);
+        resolve();
+      }, 1500);
+    });
+  }
+
+  /** サイコロの演出が終わっていたら、待っている側を全員起こす */
+  private flushDiceSettleWaiters(force = false) {
+    if (!force && (this.diceTumbling || this.diceAnim.some((a) => a !== null))) return;
+    const ws = this.diceSettleWaiters;
+    this.diceSettleWaiters = [];
+    ws.forEach((w) => w());
+  }
+
   /** 検証用：各サイコロでいま上面を向いている目を、メッシュの実際の姿勢から測る */
   debugDiceTop(): [number, number] {
     const dirs: [THREE.Vector3, number][] = [
@@ -721,6 +775,7 @@ export class Board3D {
         }
       });
     }
+    this.flushDiceSettleWaiters();
     // 選択リングの明滅
     const pulse = 0.55 + 0.35 * Math.sin(now / 240);
     for (const t of this.tiles) {
