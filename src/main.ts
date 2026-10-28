@@ -5,7 +5,7 @@ import { decideCpu } from './ai/cpu';
 import { cpuLine } from './ai/speech';
 import { PERSONALITIES, Personality } from './ai/personality';
 import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
-import { NavTab, View, ViewExtras } from './ui/view';
+import { NavTab, SpeedMode, View, ViewExtras } from './ui/view';
 import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
 import { applyGameResult, levelOf, loadProfile, Profile, saveProfile } from './meta/profile';
 import { drawGacha, seededRand } from './meta/gacha';
@@ -34,7 +34,6 @@ const CPU_RESULT_MS = 600;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /** CPUの手番の速度（ふつう／速い／スキップ）。待ち時間を倍率で縮める */
-type SpeedMode = 'normal' | 'fast' | 'skip';
 const SPEED_FACTOR: Record<SpeedMode, number> = { normal: 1, fast: 0.35, skip: 0.02 };
 let speedMode: SpeedMode = 'normal';
 try {
@@ -45,27 +44,6 @@ try {
 }
 const wait = (ms: number) =>
   new Promise((r) => setTimeout(r, reducedMotion ? Math.min(ms * SPEED_FACTOR[speedMode], 120) : ms * SPEED_FACTOR[speedMode]));
-
-/** 速度ボタンの見た目と保存を現在のモードに合わせる */
-function syncSpeedBar() {
-  document.querySelectorAll<HTMLButtonElement>('#speedbar button').forEach((b) => {
-    const active = b.dataset.speed === speedMode;
-    b.classList.toggle('active', active);
-    b.setAttribute('aria-pressed', String(active));
-  });
-}
-document.querySelectorAll<HTMLButtonElement>('#speedbar button').forEach((b) => {
-  b.addEventListener('click', () => {
-    speedMode = (b.dataset.speed as SpeedMode) || 'normal';
-    try {
-      window.localStorage.setItem('fs-speed', speedMode);
-    } catch {
-      /* 保存できなくても切り替え自体は有効 */
-    }
-    syncSpeedBar();
-  });
-});
-syncSpeedBar();
 
 let state: GameState;
 let extras: ViewExtras;
@@ -103,6 +81,22 @@ const view = new View(
     restart: () => goTo('select'),
   },
 );
+
+// 設定パネル（歯車ボタン）への受け口：対戦速度と効果音の実体は main／sound 側にあり、
+// パネルの表示と操作はここ経由で行う。保存キー（fs-speed／fs-sound）は従来どおり。
+view.setSettingsHooks({
+  getSpeed: () => speedMode,
+  setSpeed: (mode) => {
+    speedMode = mode;
+    try {
+      window.localStorage.setItem('fs-speed', speedMode);
+    } catch {
+      /* 保存できなくても切り替え自体は有効 */
+    }
+  },
+  getSound: () => soundEnabled(),
+  setSound: (on) => setSoundEnabled(on),
+});
 
 // ---- 画面遷移とブラウザ履歴の連携 ----
 // 画面は5つ：タイトル（ホーム）／キャラ選択／ガチャ／コレクション／対戦。
@@ -369,19 +363,6 @@ function settleReward() {
   extras.reward = { ...reward, charName: CHARACTERS[me.character].name, rank };
   view.render(state, extras);
 }
-
-/** 効果音のオン／オフボタン */
-const soundBtn = document.getElementById('soundbtn') as HTMLButtonElement | null;
-function syncSoundBtn() {
-  if (!soundBtn) return;
-  soundBtn.textContent = soundEnabled() ? '🔊 効果音オン' : '🔇 効果音オフ';
-  soundBtn.setAttribute('aria-pressed', String(soundEnabled()));
-}
-soundBtn?.addEventListener('click', () => {
-  setSoundEnabled(!soundEnabled());
-  syncSoundBtn();
-});
-syncSoundBtn();
 
 /** タイトル画面（コイン・称号・装備テーマを反映。ガチャ・コレクションへの導線は下部タブバー） */
 function showTitleScreen() {
