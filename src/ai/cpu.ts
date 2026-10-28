@@ -11,6 +11,7 @@ import {
   canOfferTrade,
   cardUsable,
   curseTargets,
+  escapeFeeOf,
   flyTargets,
   investedValue,
   islandImmune,
@@ -871,11 +872,14 @@ function chooseAim(s: GameState, pers: Personality, rand: Rand): Aim | undefined
 }
 
 function wantsEscape(s: GameState, pers: Personality): boolean {
-  const money = s.players[s.current].money;
-  if (pers.id === 'bold') return money >= CONFIG.escapeFee + 500;
+  const p = s.players[s.current];
+  const fee = escapeFeeOf(s, p.id);
+  if (p.money < fee) return false;
+  // 脱出料は総資産連動で終盤ほど高い。払ったあとに残る余裕で判断するので、終盤は自然と居座りが増える
+  if (pers.id === 'bold') return p.money >= fee + 500;
   // 慎重派は、お金に十分な余裕があるときだけ払って出る（序盤は通行料の危険も少ないので居座る）
-  if (pers.id === 'careful') return money >= 2000;
-  return money >= 1500;
+  if (pers.id === 'careful') return p.money - fee >= 1500;
+  return p.money - fee >= 1000;
 }
 
 function pickToSell(s: GameState, pers: Personality): number {

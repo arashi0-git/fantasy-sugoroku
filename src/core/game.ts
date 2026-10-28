@@ -536,6 +536,13 @@ export function totalAssets(state: GameState, playerId: number): number {
   return p.money + Math.round(property * CONFIG.assetValueRate);
 }
 
+/** 霧の孤島の脱出料：その人の総資産の割合（下限・上限つき、10G単位に丸める） */
+export function escapeFeeOf(state: GameState, playerId: number): number {
+  const raw = totalAssets(state, playerId) * CONFIG.escapeFeeRate;
+  const clamped = Math.min(CONFIG.escapeFeeMax, Math.max(CONFIG.escapeFeeMin, raw));
+  return Math.round(clamped / 10) * 10;
+}
+
 /**
  * 段階 from の土地に、プレイヤーが建てられる最高段階。
  * ホテルの上はランドマークだけ。1周目はビルまで。
@@ -1106,10 +1113,11 @@ function payEscape(s: GameState) {
   expectPhase(s, 'roll');
   const p = me(s);
   if (p.islandTurns <= 0) throw new GameError('霧の孤島にいません');
-  if (p.money < CONFIG.escapeFee) throw new GameError('脱出料が足りません');
-  p.money -= CONFIG.escapeFee;
+  const fee = escapeFeeOf(s, p.id);
+  if (p.money < fee) throw new GameError('脱出料が足りません');
+  p.money -= fee;
   p.islandTurns = 0;
-  log(s, p.id, `脱出料 ${CONFIG.escapeFee}G を払って ${BOARD[ISLAND].name} を出た`);
+  log(s, p.id, `脱出料 ${fee}G を払って ${BOARD[ISLAND].name} を出た`);
 }
 
 /** 止まったマスの処理。special = false なら旋風・剛腕は起こさない（押し出し・吹き飛ばしのあと） */

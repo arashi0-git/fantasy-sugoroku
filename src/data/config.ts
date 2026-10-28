@@ -35,9 +35,12 @@ export const CONFIG = {
   /** この回数ゾロ目が続くと無人島へ */
   doublesToIsland: 3,
 
-  /** 無人島で動けない手番の数と、脱出料 */
+  /** 無人島で動けない手番の数と、脱出料（総資産の割合・下限つき） */
   islandTurns: 3,
-  escapeFee: 200,
+  escapeFeeRate: 0.1,
+  escapeFeeMin: 200,
+  /** 脱出料の上限。外すときは Number.POSITIVE_INFINITY にする */
+  escapeFeeMax: Number.POSITIVE_INFINITY,
   /** 連続した土地のボーナス：同じ人の土地が盤面で n マス続いていると、通行料 ×(1 + chainBonus[n])（5マス以上は最後の値） */
   chainBonus: [0, 0, 0.3, 0.6, 1.0, 1.0] as readonly number[],
   /** 祭りの土地の通行料倍率 */
