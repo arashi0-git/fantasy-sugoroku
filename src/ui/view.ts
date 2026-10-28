@@ -457,6 +457,12 @@ export class View {
   private board3dFailed = false;
   /** 先読みの成否が既に確定したかどうか */
   private board3dDone = false;
+  /**
+   * 盤面を表示する画面（対戦）にいるかどうか。初期化（先読み）と有効化は分ける：
+   * 盤面の用意はタイトル表示中に済ませるが、描画ループは対戦画面の間だけ回す。
+   * 先読み完了前はここへ貯めておき、完了時に反映する
+   */
+  private boardWanted = false;
   /** 先読みの成否が確定したときの通知先（main がタイトルのエラー表示を切り替える） */
   private boardStatusHandler: ((ok: boolean) => void) | null = null;
 
@@ -472,6 +478,26 @@ export class View {
   /** 3D盤面の読み込みに失敗しているか（成否が未確定の間は false） */
   get boardFailed(): boolean {
     return this.board3dFailed;
+  }
+
+  /** 先読みがまだ終わっていないか（対戦開始の可否を一元管理する main が使う） */
+  get boardPending(): boolean {
+    return !this.board3dDone;
+  }
+
+  /** 先読みが成功して、対戦を始められる状態か */
+  get boardReadyNow(): boolean {
+    return this.board3dDone && !this.board3dFailed;
+  }
+
+  /**
+   * 3D盤面の描画ループを回すかどうかを切り替える。
+   * 対戦画面（render）では true、それ以外の画面（タイトル／選択／ガチャ／コレクション）では false にし、
+   * 画面の裏で WebGL の描画を回し続けて CPU/GPU を消費しないようにする
+   */
+  private setBoardWanted(on: boolean) {
+    this.boardWanted = on;
+    this.board3d?.setActive(on);
   }
 
   /** 先読みが終わるまで待ち、成功なら true を返す */
@@ -493,7 +519,8 @@ export class View {
           BOARD.map((sq) => placement(sq.index)),
           (i) => this.tapSquare(i),
         );
-        this.board3d.setActive(true);
+        // 用意ができてもすぐには描画を始めない。有効化は対戦画面に入ってから（setBoardWanted）
+        this.board3d.setActive(this.boardWanted);
         if (this.last) this.render(...this.last);
         return true;
       } catch {
@@ -707,6 +734,8 @@ export class View {
   private pendingKey = '';
 
   render(s: GameState, x: ViewExtras) {
+    // render は対戦画面でだけ呼ばれる。3D盤面の描画ループはここから有効化する
+    this.setBoardWanted(true);
     this.last = [s, x];
     this.human = x.human;
     // いま決めるのがあなたか（守りのカードの割り込みでは、相手の手番でもあなたが決めることがある）
@@ -848,7 +877,8 @@ export class View {
       if (pickable) {
         tile.tabIndex = 0;
         tile.setAttribute('role', 'button');
-        tile.removeAttribute('aria-label');
+        // マスの中身はCSSで隠しているため、支援技術向けの名前は aria-label で明示する
+        tile.setAttribute('aria-label', `${sq.name}を選ぶ`);
       } else if (!sel) {
         // 対象選択中でないときは、タップで詳細を開けるボタンとして扱う
         tile.tabIndex = 0;
@@ -2283,6 +2313,7 @@ export class View {
    * 「はじめる」を押せなくする（2Dへの代替表示はせず、対戦を始めさせない）
    */
   showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null, boardError = false) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
@@ -2308,11 +2339,23 @@ export class View {
       );
     }
     const startBtn = el('button', 'title-start', 'ゲームをはじめる');
-    startBtn.disabled = boardError;
-    startBtn.addEventListener('click', () => {
-      host.hidden = true;
-      onStart();
-    });
+    if (boardError) {
+      startBtn.disabled = true;
+    } else if (!this.board3dDone) {
+      // 先読みが終わるまでは「読み込み中」で押せなくする。クリックと同時にタイトルを
+      // 消してしまうと、準備ができるまで未初期化の画面が露出してしまうため、
+      // タイトルは表示したままにし、遷移は準備完了後に main 側が行う
+      startBtn.disabled = true;
+      startBtn.textContent = '読み込み中…';
+      void this.board3dReady.then((ok) => {
+        // 失敗時は main がタイトルを作り直してエラーを出すので、ここでは成功時だけ戻す。
+        // 作り直し済み（DOMから外れた）ボタンには触らない
+        if (!ok || !startBtn.isConnected) return;
+        startBtn.disabled = false;
+        startBtn.textContent = 'ゲームをはじめる';
+      });
+    }
+    startBtn.addEventListener('click', () => onStart());
     wrap.append(startBtn);
     // ガチャ・コレクションへの導線は下部タブバーに一本化した（タイトル内のボタンは置かない）
     const howBtn = el('button', 'title-how', 'あそびかた');
@@ -2338,6 +2381,7 @@ export class View {
 
   /** ゲーム開始前のキャラ選び。profile があれば未所持キャラをロックし、所持キャラにレベルを出す */
   showCharacterSelect(host: HTMLElement, onPick: (id: CharacterId) => void, profile?: Profile | null) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
@@ -2394,6 +2438,7 @@ export class View {
 
   /** ガチャ画面。回す→光る→結果、の短い演出つき */
   showGacha(host: HTMLElement, profile: Profile, h: GachaHandlers) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
@@ -2481,6 +2526,7 @@ export class View {
 
   /** コレクション画面。見た目アイテムの装備と、所持キャラのレベル確認ができる */
   showCollection(host: HTMLElement, profile: Profile, h: CollectionHandlers) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;

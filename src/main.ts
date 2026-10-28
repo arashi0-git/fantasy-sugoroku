@@ -112,6 +112,11 @@ const SCREEN_NAMES: Record<AppScreen, string> = {
 let screen: AppScreen = 'title';
 /** 対戦が存在するか（破棄したら false。履歴で「対戦」に戻っても復元はできない） */
 let hasGame = false;
+/**
+ * 保留中の対戦開始リクエストの世代。画面遷移のたびに進め、
+ * 先読み完了を待っている間に別の画面へ移ったら、古いリクエストを無効化する
+ */
+let startToken = 0;
 
 function pushScreen(target: AppScreen) {
   try {
@@ -140,6 +145,27 @@ function syncNavBar() {
 
 /** 実際の画面切り替え。push=true ならブラウザ履歴に積む */
 function goTo(target: AppScreen, push = true) {
+  // どの画面へ移っても、保留中の開始リクエスト（先読み待ち）は無効になる
+  startToken += 1;
+  if (target === 'select') {
+    // 対戦開始の可否は、この共通パスで一元的に強制する（入口がタイトルボタンでも
+    // ブラウザ履歴でも、ここを通らない限りキャラ選択＝対戦開始には進めない）
+    if (view.boardFailed) {
+      // 3Dを表示できない環境では進ませない。履歴の指す先をタイトルに置き換え、
+      // タイトルに留まってエラーを出す
+      target = 'title';
+      push = false;
+      replaceScreen('title');
+    } else if (view.boardPending) {
+      // 先読みが終わるまで現在の画面に留まり、完了したら改めて選択画面へ進む。
+      // その間に別の画面へ移っていたら（startToken が進んでいたら）取りやめる
+      const token = startToken;
+      void view.waitBoardReady().then(() => {
+        if (token === startToken) goTo('select', push);
+      });
+      return;
+    }
+  }
   screen = target;
   if (push) pushScreen(target);
   const titleEl = document.getElementById('title')!;
@@ -374,16 +400,13 @@ function showTitleScreen() {
 }
 
 /**
- * 「ゲームをはじめる」の先。3D盤面の先読みが終わるまで待ち、
- * 失敗していたら対戦を始めず、タイトルに留まってエラーを出す
- * （2Dへの代替表示はしない。通常のゲームと同様、表示できない環境では始めない）
+ * 「ゲームをはじめる」の先。対戦開始の可否（3D盤面の先読みの成否）は、
+ * 共通の遷移パスである goTo('select') が一元的に強制する：
+ * 先読み中は完了まで遷移を保留し、失敗していたら対戦を始めずタイトルに留まって
+ * エラーを出す（2Dへの代替表示はしない。通常のゲームと同様、表示できない環境では始めない）。
+ * 入口ごとの個別チェックに頼らず、ここでは共通パスへ委ねるだけにする
  */
-async function startFlow() {
-  const ok = await view.waitBoardReady();
-  if (!ok) {
-    showTitleScreen();
-    return;
-  }
+function startFlow() {
   goTo('select');
 }
 

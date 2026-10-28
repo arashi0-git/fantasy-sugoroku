@@ -2462,8 +2462,26 @@ button.hand-card:hover:not(:disabled) {
   box-shadow: none;
   pointer-events: none;
 }
-.tile {
+/* マス自体は見せないが、キーボード操作と支援技術から辿れるようにする。
+   visibility: hidden だとタイルがフォーカスも読み上げもできなくなるため使わず、
+   タイルの地（背景・影・枠）と中身だけを隠す。
+   フォーカスが当たったときだけ、輪郭とマス名を出して位置を知らせる */
+.board .tile {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.board .tile > * {
   visibility: hidden;
+}
+.board .tile:focus-visible {
+  outline: 3px solid var(--brass);
+  outline-offset: -3px;
+  background: rgb(10 14 26 / 0.78);
+}
+.board .tile:focus-visible .name {
+  visibility: visible;
+  color: var(--on-table);
 }
 /* ターン・手番・順番を盤面の外（横の列の先頭）に出す帯。
    盤面の中央に重ねると3Dのマスやラベルと被るため、renderCenter が .dock の先頭へ移す。
