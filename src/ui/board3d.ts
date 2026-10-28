@@ -21,9 +21,18 @@ const TILE = 1.04;
 const TILE_H = 0.16;
 /** カメラの基本距離。盤面の1辺（約10単位）がほぼ収まる距離にして、寄りすぎないようにする */
 const CAM_DIST = 12.3;
+/**
+ * 横方向に最低限収めたい半幅（狭い画面でカメラを引くときの目安、実測ベース）。
+ * 内訳：端マス中心 4.48 ＋ ラベル半幅 0.67 ＋ 追従のずれ（FIT_FOLLOW_PULL 分で最大 0.81）
+ * ＋ 手前側のマスが透視で大きく写る分の余裕（約1.5）。
+ * 追従位置を四隅・四辺に置いて全数実測し、全位置でラベルが切れないことを確かめた値
+ */
+const FIT_HALF_W = 7.5;
+/** 盤面全体を収めるためにカメラを引いた画面での追従の引き寄せ量（通常は FOLLOW_PULL） */
+const FIT_FOLLOW_PULL = 0.18;
 /** カメラの基本の見下ろし角（真上から測った角度）。浅すぎず深すぎない斜め見下ろし */
 const CAM_POLAR = 0.94;
-/** 手番のコマへの追従の強さ。コマを画面中央に固定せず、盤面の文脈が残るよう中心へ少し引き戻す */
+/** 手番のコマへの追従の強さ（基本値）。コマを画面中央に固定せず、盤面の文脈が残るよう中心へ少し引き戻す */
 const FOLLOW_PULL = 0.5;
 
 /** 9×9 グリッドの行・列 → 3D座標。2D盤面と同じく、行9が手前（南）、列9が右（東） */
@@ -272,6 +281,80 @@ function buildToken(color: string): THREE.Group {
   return g;
 }
 
+/** 盤面中央に出す3Dサイコロの大きさと、台の上に静置するときの中心の高さ */
+const DIE_SIZE = 0.62;
+const DIE_Y = DIE_SIZE / 2 + 0.02;
+/** サイコロの置き場所（盤面中央＝リングの空きスペース。少しずらして2個並べる） */
+const DIE_POS: [number, number][] = [
+  [-0.42, 0.1],
+  [0.44, -0.12],
+];
+/**
+ * サイコロの面の値。BoxGeometry の材質順 [+x, -x, +y, -y, +z, -z] に対応し、
+ * 向かい合う面の合計が7になる標準配置にする
+ */
+const FACE_VALUES = [3, 4, 1, 6, 2, 5];
+/** 面の目の位置（3×3のマス番号。DOMサイコロと同じ並び） */
+const DIE_PIPS: Record<number, number[]> = {
+  1: [4],
+  2: [0, 8],
+  3: [0, 4, 8],
+  4: [0, 2, 6, 8],
+  5: [0, 2, 4, 6, 8],
+  6: [0, 2, 3, 5, 6, 8],
+};
+
+/** サイコロの1面分のテクスチャ（白い面に目を描く） */
+function dieFaceTexture(v: number): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const g = canvas.getContext('2d')!;
+  g.fillStyle = '#f8f4e9';
+  g.fillRect(0, 0, 128, 128);
+  g.strokeStyle = 'rgba(96, 84, 60, 0.4)';
+  g.lineWidth = 3;
+  g.beginPath();
+  g.roundRect(7, 7, 114, 114, 16);
+  g.stroke();
+  g.fillStyle = '#26222e';
+  const cell = 128 / 3;
+  for (let k = 0; k < 9; k++) {
+    if (!DIE_PIPS[v].includes(k)) continue;
+    g.beginPath();
+    g.arc((k % 3) * cell + cell / 2, Math.floor(k / 3) * cell + cell / 2, v === 1 ? 17 : 13, 0, Math.PI * 2);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/** 指定の目を上面にする基本姿勢 */
+function quatForTop(v: number): THREE.Quaternion {
+  const e = new THREE.Euler();
+  switch (v) {
+    case 6:
+      e.x = Math.PI; // -y を上へ
+      break;
+    case 2:
+      e.x = -Math.PI / 2; // +z を上へ
+      break;
+    case 5:
+      e.x = Math.PI / 2; // -z を上へ
+      break;
+    case 3:
+      e.z = Math.PI / 2; // +x を上へ
+      break;
+    case 4:
+      e.z = -Math.PI / 2; // -x を上へ
+      break;
+    default:
+      break; // 1 は +y がすでに上
+  }
+  return new THREE.Quaternion().setFromEuler(e);
+}
+
 /** 同じマスに複数コマがいる場合のずらし（最大4人） */
 const TOKEN_OFFSETS: [number, number][] = [
   [-0.24, -0.24],
@@ -301,7 +384,20 @@ export class Board3D {
   private marker: THREE.Mesh;
   private markerTarget = new THREE.Vector3();
   private markerVisible = false;
+  /** 盤面中央の3Dサイコロ（2個）と、その表示状態 */
+  private dice: THREE.Mesh[] = [];
+  /** いま上面に出すべき出目（ゲーム側から渡された確定値） */
+  private diceShown: [number, number] = [1, 1];
+  /** 振っている最中（転がし続ける）かどうか */
+  private diceTumbling = false;
+  /** 出目が確定した後の「止まる」アニメーション（サイコロごと） */
+  private diceAnim: ({ from: THREE.Quaternion; final: THREE.Quaternion; axis: THREE.Vector3; turns: number; t0: number } | null)[] = [null, null];
   private follow = new THREE.Vector3();
+  /** カメラの距離（狭い画面では resize で引き延ばす。通常は CAM_DIST） */
+  private dist = CAM_DIST;
+  /** 追従の引き寄せ量。盤面全体を収めるためにカメラを引いた画面では、視点のずれで
+      反対側の端が切れないよう、収まる範囲に合わせて resize で弱める */
+  private followPull = FOLLOW_PULL;
   private followInit = false;
   private lastFollowSquare = -1;
   /** ドラッグによる視点のずれ（目標値と現在値） */
@@ -407,6 +503,19 @@ export class Board3D {
     this.marker.rotation.x = Math.PI;
     this.marker.visible = false;
     this.scene.add(this.marker);
+
+    // 盤面中央（リングの空きスペース）に出す3Dサイコロ。マスとは重ならない場所なので常時置く
+    const dieGeo = new THREE.BoxGeometry(DIE_SIZE, DIE_SIZE, DIE_SIZE);
+    for (let i = 0; i < 2; i++) {
+      const mats = FACE_VALUES.map(
+        (v) => new THREE.MeshStandardMaterial({ map: dieFaceTexture(v), roughness: 0.38, metalness: 0.02 }),
+      );
+      const die = new THREE.Mesh(dieGeo, mats);
+      die.position.set(DIE_POS[i][0], DIE_Y, DIE_POS[i][1]);
+      die.quaternion.copy(quatForTop(1));
+      this.scene.add(die);
+      this.dice.push(die);
+    }
 
     // Webフォントが届いたらラベルを描き直す（読み込み前は代替フォントで描かれているため）
     if (typeof document !== 'undefined' && document.fonts?.ready) {
@@ -514,6 +623,54 @@ export class Board3D {
     }
   }
 
+  /**
+   * サイコロの表示をゲーム側に合わせる（view.ts の render から毎回呼ばれる）。
+   * 振っている間は転がし続け、確定したら、その目が上面に来る姿勢へ転がしながら止まる
+   */
+  syncDice(values: [number, number], rolling: boolean) {
+    if (rolling) {
+      this.diceTumbling = true;
+      return;
+    }
+    const changed = values[0] !== this.diceShown[0] || values[1] !== this.diceShown[1];
+    if (!this.diceTumbling && !changed) return;
+    this.diceTumbling = false;
+    this.diceShown = [values[0], values[1]];
+    const now = performance.now();
+    this.dice.forEach((die, i) => {
+      // 向き（上面まわりの回転）をばらして自然に見せる。上面の目そのものは変えない
+      const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.floor(Math.random() * 4) * (Math.PI / 2));
+      const final = yaw.multiply(quatForTop(values[i]));
+      const axis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+      this.diceAnim[i] = { from: die.quaternion.clone(), final, axis, turns: 2 + Math.floor(Math.random() * 2), t0: now + i * 80 };
+    });
+  }
+
+  /** 検証用：各サイコロでいま上面を向いている目を、メッシュの実際の姿勢から測る */
+  debugDiceTop(): [number, number] {
+    const dirs: [THREE.Vector3, number][] = [
+      [new THREE.Vector3(1, 0, 0), 3],
+      [new THREE.Vector3(-1, 0, 0), 4],
+      [new THREE.Vector3(0, 1, 0), 1],
+      [new THREE.Vector3(0, -1, 0), 6],
+      [new THREE.Vector3(0, 0, 1), 2],
+      [new THREE.Vector3(0, 0, -1), 5],
+    ];
+    const top = (die: THREE.Mesh): number => {
+      let best = 1;
+      let bestY = -Infinity;
+      for (const [d, v] of dirs) {
+        const y = d.clone().applyQuaternion(die.quaternion).y;
+        if (y > bestY) {
+          bestY = y;
+          best = v;
+        }
+      }
+      return best;
+    };
+    return [top(this.dice[0]), top(this.dice[1])];
+  }
+
   private tileXZ(i: number): { x: number; z: number } {
     const p = this.tiles[i].group.position;
     return { x: p.x, z: p.z };
@@ -540,6 +697,30 @@ export class Board3D {
     } else {
       this.marker.visible = false;
     }
+    // サイコロ：振っている間は転がし続け、確定後は余分な回転を減衰させながら最終姿勢へ収める
+    if (this.diceTumbling) {
+      this.dice.forEach((die, i) => {
+        die.rotation.x += dt * (8.5 + i * 2.2);
+        die.rotation.z += dt * (6.8 - i * 1.9);
+        die.position.y = DIE_Y + Math.abs(Math.sin(now / 120 + i * 1.7)) * 0.2;
+      });
+    } else {
+      this.dice.forEach((die, i) => {
+        const a = this.diceAnim[i];
+        if (!a) return;
+        const p = Math.min(1, Math.max(0, (now - a.t0) / 620));
+        const e = 1 - Math.pow(1 - p, 3);
+        const base = new THREE.Quaternion().slerpQuaternions(a.from, a.final, e);
+        const spin = new THREE.Quaternion().setFromAxisAngle(a.axis, Math.PI * 2 * a.turns * (1 - e));
+        die.quaternion.copy(spin.multiply(base));
+        die.position.y = DIE_Y + Math.sin(p * Math.PI) * 0.3;
+        if (p >= 1) {
+          die.quaternion.copy(a.final);
+          die.position.y = DIE_Y;
+          this.diceAnim[i] = null;
+        }
+      });
+    }
     // 選択リングの明滅
     const pulse = 0.55 + 0.35 * Math.sin(now / 240);
     for (const t of this.tiles) {
@@ -550,12 +731,12 @@ export class Board3D {
     const kCam = 1 - Math.exp(-dt * 5);
     this.az += (this.azT - this.az) * kCam;
     this.polar += (this.polarT - this.polar) * kCam;
-    const look = new THREE.Vector3(this.follow.x * FOLLOW_PULL, 0.15, this.follow.z * FOLLOW_PULL);
+    const look = new THREE.Vector3(this.follow.x * this.followPull, 0.15, this.follow.z * this.followPull);
     const sp = Math.sin(this.polar);
     const off = new THREE.Vector3(
-      CAM_DIST * sp * Math.sin(this.az),
-      CAM_DIST * Math.cos(this.polar),
-      CAM_DIST * sp * Math.cos(this.az),
+      this.dist * sp * Math.sin(this.az),
+      this.dist * Math.cos(this.polar),
+      this.dist * sp * Math.cos(this.az),
     );
     this.camera.position.copy(look).add(off);
     this.camera.lookAt(look);
@@ -568,7 +749,55 @@ export class Board3D {
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
+    // 狭い画面（スマホ縦など、正方形に近い小さな盤面）では基本距離のままだと
+    // 盤面のリングと端のマスのラベルが横方向に切れてしまうので、収まる分だけカメラを引く。
+    // 横画面・PC幅では従来の画角（CAM_DIST）のままにする
+    this.dist = CAM_DIST;
+    this.followPull = FOLLOW_PULL;
+    if (w < 640 && this.camera.aspect < 1.25) {
+      const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+      const need = FIT_HALF_W / (tanHalf * this.camera.aspect * CAM_DIST);
+      this.dist = CAM_DIST * Math.min(Math.max(need, 1), 1.62);
+      // 追従で視点が寄ると反対側の端が余分に外へ出るので、全体が収まる画面では
+      // 引き寄せを弱め、手番コマへの寄りは緩やかにする（FIT_HALF_W はこの前提の値）
+      this.followPull = FIT_FOLLOW_PULL;
+    }
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * 検証用：名前ラベルがキャンバスの外へはみ出しているマスを返す。
+   * スプライトの実際の投影サイズ（奥行きで変わる）で左右・上下を判定する
+   */
+  debugLabelClip(): { x: number[]; y: number[]; maxX: number; maxY: number } {
+    const rect = this.holder.getBoundingClientRect();
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const xBad: number[] = [];
+    const yBad: number[] = [];
+    let maxX = 0;
+    let maxY = 0;
+    const world = new THREE.Vector3();
+    const view = new THREE.Vector3();
+    this.tiles.forEach((t, i) => {
+      const label = t.group.children.find((c) => (c as THREE.Sprite).isSprite) as THREE.Sprite | undefined;
+      if (!label) return;
+      label.getWorldPosition(world);
+      view.copy(world).applyMatrix4(this.camera.matrixWorldInverse);
+      const depth = -view.z;
+      if (depth <= 0.1) return;
+      const p = world.clone().project(this.camera);
+      const cx = rect.left + ((p.x + 1) / 2) * rect.width;
+      const cy = rect.top + ((1 - p.y) / 2) * rect.height;
+      const halfW = ((label.scale.x / 2) / (depth * tanHalf * this.camera.aspect)) * (rect.width / 2);
+      const halfH = ((label.scale.y / 2) / (depth * tanHalf)) * (rect.height / 2);
+      const overX = Math.max(rect.left - (cx - halfW), cx + halfW - rect.right);
+      const overY = Math.max(rect.top - (cy - halfH), cy + halfH - rect.bottom);
+      if (overX > maxX) maxX = overX;
+      if (overY > maxY) maxY = overY;
+      if (overX > 4) xBad.push(i);
+      if (overY > 4) yBad.push(i);
+    });
+    return { x: xBad, y: yBad, maxX, maxY };
   }
 
   /** マス中心の画面座標（検証用）。盤面の外なら null */

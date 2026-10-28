@@ -2567,9 +2567,10 @@ body.cam-on .board.shake {
 .board-3d-canvas:active {
   cursor: grabbing;
 }
-/* 3D表示中は2Dのマスだけを消し、中央の情報（サイコロ・手番表示）はキャンバスの上に残す。
-   盤面全体はクリックを通すので、下のキャンバスがマスのタップとドラッグを受け取る。
-   操作パネル類は横の列に出る（カメラモードと同じ扱い） */
+/* 3D表示中は2Dのマスだけを消す。手番表示は盤面に重ねず横の列の帯（.center-status）へ移し、
+   サイコロは3D側が盤面中央に出す。盤面全体はクリックを通すので、
+   下のキャンバスがマスのタップとドラッグを受け取る。
+   操作パネル類も横の列に出る（カメラモードと同じ扱い） */
 body.view-3d .board {
   z-index: 1;
   background: transparent;
@@ -2580,6 +2581,19 @@ body.view-3d .board {
 }
 body.view-3d .tile {
   visibility: hidden;
+}
+/* 3D表示のとき、ターン・手番・順番を盤面の外（横の列の先頭）に出す帯。
+   盤面の中央に重ねると3Dのマスやラベルと被るため、renderCenter が .dock の先頭へ移す。
+   サイコロは帯にも中央にも出さず、3D側が盤面中央（リングの空きスペース）に出す */
+.center-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.center-status .order-bar {
+  justify-content: center;
 }
 
 /* ---------- 縦向きのときの横画面案内 ---------- */

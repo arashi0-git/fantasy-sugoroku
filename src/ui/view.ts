@@ -936,6 +936,8 @@ export class View {
         if (t.classList.contains('highlight')) highlight = i;
       });
       this.board3d.sync(s, x.shownPositions, { selectable, highlight });
+      // サイコロも3D側へ。DOMサイコロと同じ extras（振っている間は rolling、出目は確定値）を使う
+      this.board3d.syncDice(x.dice ?? [1, 1], x.rolling);
     }
   }
 
@@ -1253,8 +1255,14 @@ export class View {
     // カメラモード・3D表示では盤面の中央が見えないことがあるので、常に横の列に出す
     this.compact = this.boardEl.clientWidth < View.COMPACT_BOARD;
     const host = this.compact || this.cameraOn || this.view3d ? this.dockEl : c;
-    c.append(el('h1', 'title', 'ファンタジーすごろく'));
-    c.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
+    // 3D表示では盤面の中央は3Dそのものが占め、2Dの空き地のような余白がない。
+    // タイトルは出さず、ターン・手番・順番は横の列（スマホでは盤面の下）の先頭に
+    // 帯として出して、3Dのマスやラベルと重ならないようにする。
+    // サイコロは3D側が盤面中央（リングの空きスペース）に出すので、DOMでは出さない
+    const status: HTMLElement = this.view3d ? el('div', 'center-status') : c;
+    if (this.view3d) host.append(status);
+    else c.append(el('h1', 'title', 'ファンタジーすごろく'));
+    status.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
     if (s.phase.kind === 'gameover') {
       host.append(this.resultPanel(s, x));
@@ -1271,10 +1279,11 @@ export class View {
     const dot = el('span', 'dot');
     dot.style.setProperty('--c', me.color);
     whose.append(dot, isCpu ? `${me.name} の番（CPU）` : `${me.name} の番`);
-    c.append(whose);
-    c.append(this.orderBar(s, x));
+    status.append(whose);
+    status.append(this.orderBar(s, x));
 
-    c.append(this.dice(x));
+    // 3D表示のサイコロは board3d 側（盤面中央の3Dサイコロ）が担う
+    if (!this.view3d) status.append(this.dice(x));
 
     // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）。
     // カメラモード・3D表示では盤面の中央が見えないことがあるので、出来事の帯も横の列に出す
