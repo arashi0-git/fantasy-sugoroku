@@ -315,9 +315,9 @@ async function act(action: Action) {
     extras.rolling = false;
     extras.dice = next.rolled;
     view.render(state, extras);
-    // 3Dではサイコロが止まる演出がまだ続いているので、終わってからコマを動かす
+    // サイコロが止まる演出がまだ続いているので、終わってからコマを動かす
     // （出目が確定しないうちにピンが歩き出すと、出目が読み取りにくいため）。
-    // 2Dでは待つものはない。スキップ時は待ちを最小化するため待たない
+    // スキップ時は待ちを最小化するため待たない
     if (speedMode !== 'skip') await view.diceSettled();
   }
 
@@ -370,7 +370,21 @@ function settleReward() {
 
 /** タイトル画面（コイン・称号・装備テーマを反映。ガチャ・コレクションへの導線は下部タブバー） */
 function showTitleScreen() {
-  view.showTitle(document.getElementById('title')!, () => goTo('select'), profile);
+  view.showTitle(document.getElementById('title')!, () => void startFlow(), profile, view.boardFailed);
+}
+
+/**
+ * 「ゲームをはじめる」の先。3D盤面の先読みが終わるまで待ち、
+ * 失敗していたら対戦を始めず、タイトルに留まってエラーを出す
+ * （2Dへの代替表示はしない。通常のゲームと同様、表示できない環境では始めない）
+ */
+async function startFlow() {
+  const ok = await view.waitBoardReady();
+  if (!ok) {
+    showTitleScreen();
+    return;
+  }
+  goTo('select');
 }
 
 function openGacha() {
@@ -400,6 +414,10 @@ function openCollection() {
 /** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
 function boot() {
   replaceScreen('title');
+  // 3D盤面の先読みの成否が確定したら、失敗の場合だけタイトルにエラーを出す
+  view.setBoardStatusHandler((ok) => {
+    if (!ok && screen === 'title') showTitleScreen();
+  });
   showTitleScreen();
   syncNavBar();
 }

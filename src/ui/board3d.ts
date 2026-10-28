@@ -1,5 +1,5 @@
 // 3D盤面（Three.js による表示専用モジュール）。GameState を立体で映すだけで、ルールは持たない。
-// view.ts から動的 import される（3D表示を選んだときだけ読み込む）。
+// 盤面表示は3Dのみで、view.ts から動的 import され、タイトル画面のうちに先読みされる。
 // マスの選択は Raycaster で拾い、view.ts のタイルタップと同じ入口へ渡す。
 
 import * as THREE from 'three';
@@ -658,21 +658,6 @@ export class Board3D {
       const axis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
       this.diceAnim[i] = { from: die.quaternion.clone(), final, axis, turns: 2 + Math.floor(Math.random() * 2), t0: now + i * 80 };
     });
-  }
-
-  /**
-   * サイコロの出目をアニメーションなしで即座に表示する。
-   * 読み込み待ちのタイムアウト等で既に終わったロールのセトル演出を、
-   * 遅れて生成された盤面で再生しないために使う
-   */
-  snapDice(values: [number, number]) {
-    this.diceTumbling = false;
-    this.diceShown = [values[0], values[1]];
-    this.dice.forEach((die, i) => {
-      this.diceAnim[i] = null;
-      die.quaternion.copy(quatForTop(values[i]));
-    });
-    this.flushDiceSettleWaiters(true);
   }
 
   /**
