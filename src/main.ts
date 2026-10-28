@@ -315,6 +315,10 @@ async function act(action: Action) {
     extras.rolling = false;
     extras.dice = next.rolled;
     view.render(state, extras);
+    // 3Dではサイコロが止まる演出がまだ続いているので、終わってからコマを動かす
+    // （出目が確定しないうちにピンが歩き出すと、出目が読み取りにくいため）。
+    // 2Dでは待つものはない。スキップ時は待ちを最小化するため待たない
+    if (speedMode !== 'skip') await view.diceSettled();
   }
 
   // コマの動き：walk は1マスずつ、warp は一瞬で

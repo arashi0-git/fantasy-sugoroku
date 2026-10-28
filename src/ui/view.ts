@@ -571,6 +571,15 @@ export class View {
     this.syncSettings?.();
   }
 
+  /**
+   * サイコロの出目が確定し、演出が終わるまで待つ（main がコマ移動の開始を合わせるために使う）。
+   * 3Dでは中央のサイコロが止まるまでアニメーションが続くので、その完了を待つ。
+   * 2Dでは出目は即座に確定表示になるため、待たない
+   */
+  async diceSettled(): Promise<void> {
+    if (this.view3d && this.board3d) await this.board3d.whenDiceSettled();
+  }
+
   /** 3D盤面モジュールを読み込んで用意する（読み込めなければ2Dに戻す） */
   private ensureBoard3d() {
     if (this.board3d) {
