@@ -8,6 +8,7 @@ import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
 import { NavTab, SpeedMode, View, ViewExtras } from './ui/view';
 import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
 import { applyGameResult, levelOf, loadProfile, Profile, saveProfile } from './meta/profile';
+import { createAuthService } from './meta/supabase';
 import { drawGacha, seededRand } from './meta/gacha';
 import { grownStats } from './meta/growth';
 
@@ -114,6 +115,18 @@ view.setSettingsHooks({
   quitGame: () => {
     void quitToTitle();
   },
+});
+
+// アカウント（ログイン）の基盤：状態の実体は AuthService が持ち、タイトル画面の
+// ログイン表示とダイアログは受け口越しに読み書きする。フェーズ2ではここまでで、
+// 対戦開始のゲートとプロフィール同期はフェーズ3で配線する（未ログインでも遊べる）
+const authService = createAuthService();
+view.setAuthHooks({
+  getState: () => authService.getState(),
+  subscribe: (listener) => authService.subscribe(listener),
+  signInWithEmail: (email) => authService.signInWithEmail(email),
+  signInWithGoogle: () => authService.signInWithGoogle(),
+  signOut: () => authService.signOut(),
 });
 
 /**
@@ -486,6 +499,8 @@ function openCollection() {
 /** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
 function boot() {
   replaceScreen('title');
+  // 保存済みセッションの復元と、ログイン状態の購読を始める（失敗しても起動は止めない）
+  void authService.init();
   // 3D盤面の先読みの成否が確定したら、失敗の場合だけタイトルにエラーを出す
   view.setBoardStatusHandler((ok) => {
     if (!ok && screen === 'title') showTitleScreen();
