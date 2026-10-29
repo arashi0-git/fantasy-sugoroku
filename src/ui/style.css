@@ -157,8 +157,12 @@ button:focus-visible {
   outline: 3px dashed var(--brass-deep);
   outline-offset: -3px;
 }
-.tile.selectable:hover,
-.tile.selectable:focus-visible {
+.tile.selectable:hover {
+  background: #fff8e4;
+  outline-style: solid;
+}
+/* フォーカス輪郭はキーボード操作中（body.kbd-nav）だけ。タッチ／マウスでは出さない */
+body.kbd-nav .tile.selectable:focus-visible {
   background: #fff8e4;
   outline-style: solid;
 }
@@ -1702,6 +1706,16 @@ button.hand-card:hover:not(:disabled) {
   justify-content: flex-end;
   margin-top: 14px;
 }
+/* 対戦を中断するボタン（対戦中のみ表示。行ごと隠す） */
+.settings-quit-row[hidden] {
+  display: none;
+}
+.settings-quit {
+  width: 100%;
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 3px 0 #8e2f29;
+}
 
 /* 横画面ではパネルが画面からはみ出さないよう余白を詰める */
 @media (orientation: landscape) and (max-height: 500px) {
@@ -1826,6 +1840,19 @@ button.hand-card:hover:not(:disabled) {
   .title,
   .gauge-wrap .hint {
     display: none;
+  }
+  /* 盤面の下の並び順：ドック（ゲージ→ボタン→イベント帯）→出来事ログ→手札→プレイヤー一覧 */
+  .side .dock {
+    order: 1;
+  }
+  .side .log-wrap {
+    order: 2;
+  }
+  .side .hand {
+    order: 3;
+  }
+  .side .players {
+    order: 4;
   }
   /* スマホでは操作パネルが盤面のすぐ下にくる。下にスクロールしても画面の下に残す */
   .dock {
@@ -2454,8 +2481,8 @@ button.hand-card:hover:not(:disabled) {
 }
 /* DOMの盤面は3Dへの同期元として裏に置く：マスは見せず、盤面全体はクリックを通すので、
    下のキャンバスがマスのタップとドラッグを受け取る。
-   手番表示は盤面に重ねず横の列の帯（.center-status）へ移し、
-   サイコロは3D側が盤面中央に出す。操作パネル類も横の列に出る */
+   手番表示は盤面エリアの内側・上部の帯（.status-strip）に重ね、
+   サイコロは3D側が盤面中央に出す。操作パネル類は盤面の下（横画面では横の列）に出る */
 .board {
   z-index: 1;
   background: transparent;
@@ -2465,8 +2492,23 @@ button.hand-card:hover:not(:disabled) {
 /* マス自体は見せないが、キーボード操作と支援技術から辿れるようにする。
    visibility: hidden だとタイルがフォーカスも読み上げもできなくなるため使わず、
    タイルの地（背景・影・枠）と中身だけを隠す。
-   フォーカスが当たったときだけ、輪郭とマス名を出して位置を知らせる */
+   フォーカスの輪郭とマス名は、キーボード操作中（body.kbd-nav）のときだけ出す。
+   タッチ／マウスでは3D側でマスを選ぶため、DOMタイルにフォーカスが残ると
+   その輪郭だけが（DOM盤面と3D盤面の位置のずれにより）盤面の外に浮いて見えてしまう */
 .board .tile {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+/* 状態クラス側のほうが詳細度で勝つ組み合わせ（観光地×所有の影など）も含め、
+   裏側のDOMタイルの枠・影・地は一切出さない。出すと3D盤面と二重になるうえ、
+   DOM盤面と3D盤面の位置のずれで、所有者色の枠だけが盤面の外に浮いて見えてしまう */
+.board .tile.owned,
+.board .tile.tourist,
+.board .tile.tourist.owned,
+.board .tile.sanctuary-on,
+.board .tile.selectable,
+.board .tile.highlight {
   background: transparent;
   box-shadow: none;
   outline: none;
@@ -2474,67 +2516,75 @@ button.hand-card:hover:not(:disabled) {
 .board .tile > * {
   visibility: hidden;
 }
-.board .tile:focus-visible {
+body.kbd-nav .board .tile:focus-visible {
   outline: 3px solid var(--brass);
   outline-offset: -3px;
   background: rgb(10 14 26 / 0.78);
 }
-.board .tile:focus-visible .name {
+body.kbd-nav .board .tile:focus-visible .name {
   visibility: visible;
   color: var(--on-table);
 }
-/* ターン・手番・順番を盤面の外（横の列の先頭）に出す帯。
-   盤面の中央に重ねると3Dのマスやラベルと被るため、renderCenter が .dock の先頭へ移す。
+/* ターン・手番・順番を、盤面エリアの内側・上部に重ねて出す帯。
+   フローの要素として盤面の真上に置くと、場所が移るだけで縦の圧迫は変わらないため、
+   盤面ビュー（.board-view）の内側にオーバーレイして高さを一切消費しない。
+   盤面の下は操作（ゲージ→ボタン）とイベント表示に空ける。
    サイコロは帯にも中央にも出さず、3D側が盤面中央（リングの空きスペース）に出す */
-.center-status {
+.status-strip {
+  position: absolute;
+  top: 6px;
+  /* 左右いっぱいに広げて中央寄せする（left: 50% だけだと使える幅が半分になり、
+     ピルが無駄に折り返して縦に伸びてしまう） */
+  left: 0;
+  right: 0;
+  z-index: 5;
+  padding-inline: 6px;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  text-align: center;
-}
-.center-status .order-bar {
   justify-content: center;
+  align-items: flex-start;
+  /* 帯の下の盤面のタップ／ドラッグを妨げない */
+  pointer-events: none;
 }
-
-/* ---------- 縦向きのときの横画面案内 ---------- */
-
-.rotate-hint {
+/* 対戦が始まるまでは空なので、場所も取らない */
+.status-strip:empty {
   display: none;
 }
-@media (max-width: 760px) and (orientation: portrait) {
-  /* タイトル・キャラ選択（z-index 20/30）の下に隠れるので、見えるのは対戦画面だけ */
-  .rotate-hint {
-    position: fixed;
-    top: calc(8px + env(safe-area-inset-top, 0px));
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 4;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 5px 3px 11px;
-    border-radius: 999px;
-    background: rgb(16 22 40 / 0.72);
-    color: var(--on-table);
-    font-size: 12px;
-    white-space: nowrap;
-    box-shadow: 0 2px 8px rgb(0 0 0 / 0.3);
-    pointer-events: none;
+.center-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1px 12px;
+  padding: 3px 14px;
+  border-radius: 999px;
+  /* 盤面の上に重なるため、半透明にして盤面が透けても文字が読めるようにする */
+  background: rgb(34 48 74 / 0.86);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.35);
+  text-align: center;
+  line-height: 1.5;
+}
+.center-status .turn {
+  font-size: 12.5px;
+}
+.center-status .whose {
+  font-size: 14px;
+}
+.center-status .order-bar {
+  margin: 0;
+  justify-content: center;
+  font-size: 11.5px;
+}
+
+/* 盤面とサイド列を同じ行に並べる（スマホ幅では通常フローで積む）。
+   帯は盤面ビューの内側に重なるため、グリッドの行は取らない */
+@media (min-width: 761px) {
+  .board-view {
+    grid-column: 1;
+    grid-row: 1;
   }
-  .rotate-hint-close {
-    pointer-events: auto;
-    border: 0;
-    background: transparent;
-    color: var(--on-table-soft);
-    font: inherit;
-    font-size: 11px;
-    line-height: 1;
-    padding: 4px 6px;
-    cursor: pointer;
-  }
-  body.hint-off .rotate-hint {
-    display: none;
+  .side {
+    grid-column: 2;
+    grid-row: 1;
   }
 }
 
@@ -2548,6 +2598,7 @@ button.hand-card:hover:not(:disabled) {
   }
   .app {
     grid-template-columns: minmax(0, 1fr) var(--side-w);
+    /* 盤面と右カラムを1行に収める（帯は盤面ビューの内側に重なるため行は取らない） */
     grid-template-rows: minmax(0, 1fr);
     height: 100vh;
     height: 100dvh;
@@ -2557,8 +2608,14 @@ button.hand-card:hover:not(:disabled) {
   }
   /* 盤面は左カラムいっぱいに広げる（マスは幅÷9が効くので、横向きでは幅が大きく取れる） */
   .board-view {
+    grid-column: 1;
+    grid-row: 1;
     width: 100%;
     height: 100%;
+  }
+  .side {
+    grid-column: 2;
+    grid-row: 1 / -1;
   }
   .board {
     width: 100%;
@@ -2605,6 +2662,14 @@ button.hand-card:hover:not(:disabled) {
 /* 対戦画面の末尾がタブバーに隠れないよう、ページ全体に下の余白を確保する */
 body {
   padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+}
+
+/* 対戦中はタブバーを隠すので、下の余白は安全領域分だけでよい */
+body.in-game {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tabbar[hidden] {
+  display: none;
 }
 
 .tabbar {
@@ -2709,6 +2774,10 @@ body {
   .dock {
     bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
   }
+  /* 対戦中はタブバーが無いので、ドックは画面の下端に貼り付ける */
+  body.in-game .dock {
+    bottom: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 /* 横画面ではタブバーを細くし、盤面の高さから差し引いて重ならないようにする */
@@ -2721,6 +2790,10 @@ body {
   }
   .app {
     height: calc(100dvh - var(--tabbar-h) - env(safe-area-inset-bottom, 0px));
+  }
+  /* 対戦中はタブバーが無いぶん、盤面の高さを画面いっぱいに広げる */
+  body.in-game .app {
+    height: calc(100dvh - env(safe-area-inset-bottom, 0px));
   }
   .tab-btn {
     flex-direction: row;

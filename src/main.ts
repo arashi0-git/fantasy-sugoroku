@@ -82,6 +82,20 @@ const view = new View(
   },
 );
 
+// ---- 画面の状態（設定フックの登録より前に初期化する） ----
+// 設定フックは登録の瞬間に view 側から同期的に呼ばれる（setSettingsHooks →
+// syncSettings → inGame）。フックが読む画面状態が未初期化だと、初期化前参照
+// （TDZ）で起動時に例外になりタイトルへ到達できないため、登録より前に置く。
+type AppScreen = 'title' | 'select' | 'gacha' | 'collection' | 'game';
+let screen: AppScreen = 'title';
+/** 対戦が存在するか（破棄したら false。履歴で「対戦」に戻っても復元はできない） */
+let hasGame = false;
+/**
+ * 保留中の対戦開始リクエストの世代。画面遷移のたびに進め、
+ * 先読み完了を待っている間に別の画面へ移ったら、古いリクエストを無効化する
+ */
+let startToken = 0;
+
 // 設定パネル（歯車ボタン）への受け口：対戦速度と効果音の実体は main／sound 側にあり、
 // パネルの表示と操作はここ経由で行う。保存キー（fs-speed／fs-sound）は従来どおり。
 view.setSettingsHooks({
@@ -96,12 +110,29 @@ view.setSettingsHooks({
   },
   getSound: () => soundEnabled(),
   setSound: (on) => setSoundEnabled(on),
+  inGame: () => screen === 'game' && hasGame && state.phase.kind !== 'gameover',
+  quitGame: () => {
+    void quitToTitle();
+  },
 });
+
+/**
+ * 設定パネルの「ゲームを中断する」から対戦をやめてタイトルへ戻る。
+ * タブバーのホームボタンと同じ対戦破棄の確認を経てから破棄する
+ */
+async function quitToTitle() {
+  if (screen !== 'game' || !hasGame || state.phase.kind === 'gameover') return;
+  const ok = await view.confirmDialog('対戦の途中です。対戦をやめて、ホームへ移動しますか？', '対戦をやめて移動する');
+  if (!ok) return;
+  leaveGame();
+  goTo('title');
+}
 
 // ---- 画面遷移とブラウザ履歴の連携 ----
 // 画面は5つ：タイトル（ホーム）／キャラ選択／ガチャ／コレクション／対戦。
 // 遷移はすべて goTo / requestNav を通し、履歴（pushState）と下部タブバーの状態を揃える。
-type AppScreen = 'title' | 'select' | 'gacha' | 'collection' | 'game';
+// 現在の画面（screen）・対戦の有無（hasGame）・開始世代（startToken）の宣言は、
+// 設定フック登録より前（ファイル上部）に置いてある。
 const SCREEN_NAMES: Record<AppScreen, string> = {
   title: 'ホーム',
   select: 'キャラ選択',
@@ -109,14 +140,6 @@ const SCREEN_NAMES: Record<AppScreen, string> = {
   collection: 'コレクション',
   game: '対戦',
 };
-let screen: AppScreen = 'title';
-/** 対戦が存在するか（破棄したら false。履歴で「対戦」に戻っても復元はできない） */
-let hasGame = false;
-/**
- * 保留中の対戦開始リクエストの世代。画面遷移のたびに進め、
- * 先読み完了を待っている間に別の画面へ移ったら、古いリクエストを無効化する
- */
-let startToken = 0;
 
 function pushScreen(target: AppScreen) {
   try {
@@ -149,6 +172,9 @@ function syncNavBar() {
   view.setNavState({
     active: screen === 'title' ? 'home' : screen === 'gacha' ? 'gacha' : screen === 'collection' ? 'collection' : null,
     lockMeta: screen === 'game' && !over,
+    // 対戦の途中はタブバーを隠して盤面を広く使う。結果画面ではホームへ戻る
+    // 導線としてタブバーを出す（対戦をやめる導線は設定の中断ボタンが担う）
+    inGame: screen === 'game' && !over,
   });
 }
 

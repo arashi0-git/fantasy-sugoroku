@@ -114,6 +114,8 @@ export interface NavBarState {
   active: NavTab | null;
   /** 対戦の途中かどうか。途中は対戦を抜けないと行けないガチャ・コレクションを無効化する */
   lockMeta: boolean;
+  /** 対戦の途中（対戦画面）かどうか。途中はタブバーを隠して盤面の表示領域を広げる */
+  inGame: boolean;
 }
 
 /** 対戦速度の選択肢（待ち時間の計算は main が担う。保存キーは fs-speed） */
@@ -129,6 +131,10 @@ export interface SettingsHooks {
   setSpeed(mode: SpeedMode): void;
   getSound(): boolean;
   setSound(on: boolean): void;
+  /** 対戦の途中かどうか（設定パネルの「ゲームを中断する」ボタンを出すかの判定） */
+  inGame?(): boolean;
+  /** 対戦を中断する（対戦破棄の確認ダイアログは main 側が担う） */
+  quitGame?(): void;
 }
 
 export interface ViewExtras {
@@ -278,10 +284,22 @@ export class View {
     const boardView = el('div', 'board-view');
     this.boardEl.parentElement?.insertBefore(boardView, this.boardEl);
     boardView.append(this.boardEl);
+    // ターン・手番・順番の帯は、盤面エリア（.board-view）の内側・上部に重ねて出す。
+    // フローの要素として盤面の上に置くと場所が移るだけで縦の圧迫は変わらないため、
+    // オーバーレイにして高さを消費させない（盤面の下は操作とイベントに空ける）
+    const statusStrip = el('div', 'status-strip');
+    statusStrip.setAttribute('aria-label', 'ターンと順番');
+    // 手番・順番は元々 aria-live 付きの #dock 内に出していた。帯へ移したので、
+    // 帯自体をライブリージョンにして手番交代が支援技術にも伝わるようにする
+    statusStrip.setAttribute('aria-live', 'polite');
+    statusStrip.setAttribute('aria-atomic', 'true');
+    this.statusEl = statusStrip;
     // 3D盤面の置き場所（盤面の下に敷く。DOMのマスは同期元として裏に残し、見せない）
     const holder3d = el('div', 'board-3d');
     boardView.append(holder3d);
     this.board3dHolder = holder3d;
+    // 帯は盤面ビューの内側に重ねる（重なり順でいちばん上に来るよう、最後に足す）
+    boardView.append(statusStrip);
     // 盤面表示は3Dのみ。タイトル画面のうちにモジュールと盤面を先読みして、
     // 対戦が始まる頃には読み込みの成否が確定している状態にする
     this.preloadBoard3d();
@@ -319,8 +337,8 @@ export class View {
     }
     this.buildSheet();
     this.buildSettings();
-    this.buildRotateHint();
     this.buildTabBar();
+    this.initInputModality();
     this.buildConfirmDialog();
     requestAnimationFrame(this.tickGauge);
   }
@@ -403,6 +421,19 @@ export class View {
     soundRow.append(el('span', 'speed-label', '効果音'), soundBtn);
     box.append(soundRow);
 
+    // 対戦を中断する（対戦中のみ出す）。対戦中はタブバーが隠れているため、
+    // 対戦をやめてタイトルへ戻る導線はここに置く。確認ダイアログは main 側が担う
+    const quitBtn = el('button', 'btn settings-quit', 'ゲームを中断する');
+    quitBtn.type = 'button';
+    quitBtn.addEventListener('click', () => {
+      this.closeSettings();
+      this.settingsHooks?.quitGame?.();
+    });
+    const quitRow = el('div', 'settings-row settings-quit-row');
+    quitRow.append(quitBtn);
+    quitRow.hidden = true;
+    box.append(quitRow);
+
     const foot = el('div', 'settings-foot');
     const done = el('button', 'btn quiet', '閉じる');
     done.type = 'button';
@@ -430,6 +461,7 @@ export class View {
       const sound = this.settingsHooks?.getSound() ?? true;
       soundBtn.textContent = sound ? '🔊 オン' : '🔇 オフ';
       soundBtn.setAttribute('aria-pressed', String(sound));
+      quitRow.hidden = !(this.settingsHooks?.inGame?.() ?? false);
     };
     this.syncSettings = sync;
     sync();
@@ -449,6 +481,8 @@ export class View {
   // ---- 3D盤面（Three.js） ----
   /** 3D盤面の置き場所（コンストラクタで .board-view の中に作る） */
   private board3dHolder!: HTMLElement;
+  /** ターン・手番・順番の帯の置き場所（盤面の上。コンストラクタで .app へ差し込む） */
+  private statusEl!: HTMLElement;
   /** 3D盤面の本体。コンストラクタで先読みして用意する */
   private board3d: Board3D | null = null;
   /** 先読みの結果（成功なら true）。コンストラクタで開始し、タイトル表示中に確定する */
@@ -546,36 +580,36 @@ export class View {
     if (this.board3d) await this.board3d.whenDiceSettled();
   }
 
-  /** 縦向きのスマホで対戦画面を開いている間だけ出す「横画面が見やすいよ」の小さな案内 */
-  private buildRotateHint() {
-    try {
-      if (window.sessionStorage.getItem('fs-rotate-hint') === 'off') document.body.classList.add('hint-off');
-    } catch {
-      /* 判定できない環境ではそのまま出す */
-    }
-    const hint = el('div', 'rotate-hint');
-    const close = el('button', 'rotate-hint-close', '✕');
-    close.type = 'button';
-    close.setAttribute('aria-label', '案内を閉じる');
-    close.addEventListener('click', () => {
-      document.body.classList.add('hint-off');
-      try {
-        window.sessionStorage.setItem('fs-rotate-hint', 'off');
-      } catch {
-        /* 保存できなくても、この画面では閉じられる */
-      }
+  /**
+   * 入力モダリティの判定（キーボード操作中かどうか）。
+   * タイルのフォーカス輪郭（.tile:focus-visible）はキーボードで移動しているときだけ出す。
+   * タッチ／マウスでは盤面は3D側で操作するため、DOMタイルにフォーカスが残ると
+   * 輪郭だけが盤面の外に浮いて見えてしまう（style.css の body.kbd-nav ゲートと対）。
+   * Tab を押したらキーボードモード、ポインターを使ったらポインターモードに戻す
+   */
+  private initInputModality() {
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') document.body.classList.add('kbd-nav');
     });
-    hint.append(el('span', 'rotate-hint-text', '📱 横画面が見やすいよ'), close);
-    document.body.append(hint);
+    window.addEventListener(
+      'pointerdown',
+      () => {
+        document.body.classList.remove('kbd-nav');
+      },
+      { capture: true },
+    );
   }
 
   // ---- 下部タブバー（全画面共通の導線） ----
   private navButtons = new Map<NavTab, HTMLButtonElement>();
   private navHandler: ((tab: NavTab) => void) | null = null;
+  private tabBarEl!: HTMLElement;
 
-  /** 画面下に常時出すタブバー。ホーム（タイトル）／ガチャ／コレクションへ直接行き来するための導線をここにまとめる */
+  /** 画面下に出すタブバー。ホーム（タイトル）／ガチャ／コレクションへ直接行き来するための導線をここにまとめる。
+      対戦中は隠して盤面の表示領域を広げる（対戦をやめる導線は設定パネルの中断ボタン） */
   private buildTabBar() {
     const bar = el('nav', 'tabbar');
+    this.tabBarEl = bar;
     bar.setAttribute('aria-label', 'メインメニュー');
     const tabs: { id: NavTab; icon: string; label: string }[] = [
       { id: 'home', icon: '🏠', label: 'ホーム' },
@@ -600,8 +634,11 @@ export class View {
     this.navHandler = h;
   }
 
-  /** タブバーの見た目を現在の画面に合わせる（アクティブ表示と、対戦中の無効化） */
+  /** タブバーの見た目を現在の画面に合わせる（アクティブ表示、対戦中の無効化、対戦中の非表示） */
   setNavState(s: NavBarState) {
+    // 対戦中はタブバーを隠し、body の余白とレイアウトも対戦用に切り替える（style.css の body.in-game）
+    this.tabBarEl.hidden = s.inGame;
+    document.body.classList.toggle('in-game', s.inGame);
     for (const [tab, b] of this.navButtons) {
       const active = s.active === tab;
       b.classList.toggle('active', active);
@@ -842,6 +879,10 @@ export class View {
     const sel = this.selectable(s, myTurn);
     this.onTileClick = sel?.onPick ?? null;
     this.selectionActive = !!sel;
+    // フォーカスの受け渡し用に、描画時点でフォーカスが当たっているタイルを覚える
+    // （理由は末尾の受け渡し処理のコメント参照）
+    const ae0 = document.activeElement;
+    const focusedTile = ae0 instanceof HTMLElement && ae0.classList.contains('tile') ? ae0 : null;
     const ph = s.phase;
     const highlight = (ph.kind === 'buy' || ph.kind === 'build' || ph.kind === 'buyout') && !x.busy ? ph.square : -1;
 
@@ -912,6 +953,17 @@ export class View {
           }),
       );
     });
+
+    // フォーカスの受け渡し：選択フェーズの対象から外れたタイルにフォーカスが
+    // あると、上のループで tabindex を外した瞬間にブラウザがフォーカスを落として
+    // しまう（描画後に activeElement を見ても手遅れ）。交換・移築のように続けて
+    // 2つ目のマスを選ぶ場面でキーボード操作のフォーカス先が消えないよう、
+    // 描画前に覚えたタイルが対象から外れていたら、まだ選べるタイルの先頭へ移す
+    if (focusedTile && !focusedTile.hasAttribute('tabindex')) {
+      const next = sel ? this.tiles.find((t) => t.hasAttribute('tabindex')) : undefined;
+      if (next) next.focus();
+      else focusedTile.blur();
+    }
   }
 
   private tileTitle(s: GameState, sq: Square): string {
@@ -1084,19 +1136,35 @@ export class View {
     body.append(status);
   }
 
+  /** 帯に最後に出した内容のキー。同じ内容の再描画で読み上げを繰り返さないために持つ */
+  private lastStatusKey = '';
+
+  /**
+   * ターン・手番・順番の帯を差し替える。帯は aria-live のライブリージョンなので、
+   * 再描画のたびに差し替えると支援技術への通知が過剰になる。内容（本文＋割り込み表示に
+   * 効くフェーズ情報）が変わったときだけ差し替える
+   */
+  private commitStatus(status: HTMLElement, s: GameState) {
+    const responder = s.phase.kind === 'react' ? s.phase.responder : -1;
+    const key = `${s.phase.kind}|${responder}|${status.textContent}`;
+    if (key === this.lastStatusKey) return;
+    this.lastStatusKey = key;
+    this.statusEl.replaceChildren(status);
+  }
+
   private renderCenter(s: GameState, x: ViewExtras, myTurn: boolean) {
     this.centerEl.replaceChildren();
     this.dockEl.replaceChildren();
-    // 盤面の中央は3Dそのものが占め、空き地のような余白がない。
-    // お知らせと操作パネルはすべて横の列（スマホでは盤面の下）に出し、
-    // ターン・手番・順番はその先頭に帯として出して、3Dのマスやラベルと重ならないようにする。
+    // ターン・手番・順番は、盤面エリアの内側・上部の帯（.status-strip）へ小さく重ねて出す。
+    // 盤面の下（ドック）は上から 操作パネル（ゲージ→ボタン）→ イベント表示 の順にし、
+    // 縦画面でもスクロールせずにダイスボタンへ届くようにする。
     // サイコロは3D側が盤面中央（リングの空きスペース）に出すので、DOMでは出さない
-    const host = this.dockEl;
     const status = el('div', 'center-status');
-    host.append(status);
     status.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
+    const host = this.dockEl;
     if (s.phase.kind === 'gameover') {
+      this.commitStatus(status, s);
       host.append(this.resultPanel(s, x));
       return;
     }
@@ -1113,9 +1181,20 @@ export class View {
     whose.append(dot, isCpu ? `${me.name} の番（CPU）` : `${me.name} の番`);
     status.append(whose);
     status.append(this.orderBar(s, x));
+    this.commitStatus(status, s);
+
+    // 操作パネルを先に出す（サイコロの番なら ゲージ→ボタン が盤面のすぐ下に来る）
+    const panel = this.pendingFly
+      ? this.flyPanel()
+      : this.tradeDraft
+        ? this.tradePanel(s)
+        : this.pendingCard
+          ? this.cardTargetPanel(s, this.pendingCard)
+          : this.phasePanel(s, myTurn);
+    if (panel) host.append(panel);
 
     // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）。
-    // 盤面の中央は3Dが占めるので、出来事の帯も横の列に出す
+    // イベント表示はボタンの下に置く
     const banner = this.eventBanner(s, x);
     if (banner) host.append(banner);
 
@@ -1147,15 +1226,6 @@ export class View {
       if (s.lastPayment && ph !== 'buyout') host.append(this.paymentNotice(s));
       if (ph === 'roll' && s.doublesInRow > 0) host.append(el('p', 'notice', 'ゾロ目！ もう一度振れます'));
     }
-
-    const panel = this.pendingFly
-      ? this.flyPanel()
-      : this.tradeDraft
-        ? this.tradePanel(s)
-        : this.pendingCard
-          ? this.cardTargetPanel(s, this.pendingCard)
-          : this.phasePanel(s, myTurn);
-    if (panel) host.append(panel);
   }
 
   /** このターンの順番（今動いている人を強調、終わった人は薄く） */
