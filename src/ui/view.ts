@@ -284,16 +284,18 @@ export class View {
     const boardView = el('div', 'board-view');
     this.boardEl.parentElement?.insertBefore(boardView, this.boardEl);
     boardView.append(this.boardEl);
-    // ターン・手番・順番の帯は盤面の上に出す（盤面の下は操作とイベントに空ける）。
-    // .app のグリッドでは盤面の真上のセルに置かれる（style.css の .status-strip）
+    // ターン・手番・順番の帯は、盤面エリア（.board-view）の内側・上部に重ねて出す。
+    // フローの要素として盤面の上に置くと場所が移るだけで縦の圧迫は変わらないため、
+    // オーバーレイにして高さを消費させない（盤面の下は操作とイベントに空ける）
     const statusStrip = el('div', 'status-strip');
     statusStrip.setAttribute('aria-label', 'ターンと順番');
     this.statusEl = statusStrip;
-    boardView.parentElement?.insertBefore(statusStrip, boardView);
     // 3D盤面の置き場所（盤面の下に敷く。DOMのマスは同期元として裏に残し、見せない）
     const holder3d = el('div', 'board-3d');
     boardView.append(holder3d);
     this.board3dHolder = holder3d;
+    // 帯は盤面ビューの内側に重ねる（重なり順でいちばん上に来るよう、最後に足す）
+    boardView.append(statusStrip);
     // 盤面表示は3Dのみ。タイトル画面のうちにモジュールと盤面を先読みして、
     // 対戦が始まる頃には読み込みの成否が確定している状態にする
     this.preloadBoard3d();
@@ -1125,7 +1127,7 @@ export class View {
     this.centerEl.replaceChildren();
     this.dockEl.replaceChildren();
     this.statusEl.replaceChildren();
-    // ターン・手番・順番は盤面の上の帯（.status-strip）へ小さく出す。
+    // ターン・手番・順番は、盤面エリアの内側・上部の帯（.status-strip）へ小さく重ねて出す。
     // 盤面の下（ドック）は上から 操作パネル（ゲージ→ボタン）→ イベント表示 の順にし、
     // 縦画面でもスクロールせずにダイスボタンへ届くようにする。
     // サイコロは3D側が盤面中央（リングの空きスペース）に出すので、DOMでは出さない

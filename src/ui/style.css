@@ -2481,7 +2481,7 @@ button.hand-card:hover:not(:disabled) {
 }
 /* DOMの盤面は3Dへの同期元として裏に置く：マスは見せず、盤面全体はクリックを通すので、
    下のキャンバスがマスのタップとドラッグを受け取る。
-   手番表示は盤面の上の帯（.status-strip）へ移し、
+   手番表示は盤面エリアの内側・上部の帯（.status-strip）に重ね、
    サイコロは3D側が盤面中央に出す。操作パネル類は盤面の下（横画面では横の列）に出る */
 .board {
   z-index: 1;
@@ -2525,14 +2525,25 @@ body.kbd-nav .board .tile:focus-visible .name {
   visibility: visible;
   color: var(--on-table);
 }
-/* ターン・手番・順番を盤面の上に出す帯。
-   盤面の下に置くと縦画面でダイスボタンが画面外へ押し出されるため、
-   帯は盤面の真上に小さくまとめ、盤面の下は操作（ゲージ→ボタン）とイベント表示に空ける。
+/* ターン・手番・順番を、盤面エリアの内側・上部に重ねて出す帯。
+   フローの要素として盤面の真上に置くと、場所が移るだけで縦の圧迫は変わらないため、
+   盤面ビュー（.board-view）の内側にオーバーレイして高さを一切消費しない。
+   盤面の下は操作（ゲージ→ボタン）とイベント表示に空ける。
    サイコロは帯にも中央にも出さず、3D側が盤面中央（リングの空きスペース）に出す */
 .status-strip {
+  position: absolute;
+  top: 6px;
+  /* 左右いっぱいに広げて中央寄せする（left: 50% だけだと使える幅が半分になり、
+     ピルが無駄に折り返して縦に伸びてしまう） */
+  left: 0;
+  right: 0;
+  z-index: 5;
+  padding-inline: 6px;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
+  /* 帯の下の盤面のタップ／ドラッグを妨げない */
+  pointer-events: none;
 }
 /* 対戦が始まるまでは空なので、場所も取らない */
 .status-strip:empty {
@@ -2546,7 +2557,9 @@ body.kbd-nav .board .tile:focus-visible .name {
   gap: 1px 12px;
   padding: 3px 14px;
   border-radius: 999px;
-  background: var(--table-deep);
+  /* 盤面の上に重なるため、半透明にして盤面が透けても文字が読めるようにする */
+  background: rgb(34 48 74 / 0.86);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.35);
   text-align: center;
   line-height: 1.5;
 }
@@ -2562,19 +2575,16 @@ body.kbd-nav .board .tile:focus-visible .name {
   font-size: 11.5px;
 }
 
-/* 帯は盤面の列の真上に置き、サイド列は従来どおり盤面と並べる（スマホ幅では通常フローで積む） */
+/* 盤面とサイド列を同じ行に並べる（スマホ幅では通常フローで積む）。
+   帯は盤面ビューの内側に重なるため、グリッドの行は取らない */
 @media (min-width: 761px) {
-  .status-strip {
+  .board-view {
     grid-column: 1;
     grid-row: 1;
   }
-  .board-view {
-    grid-column: 1;
-    grid-row: 2;
-  }
   .side {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 1;
   }
 }
 
@@ -2588,23 +2598,18 @@ body.kbd-nav .board .tile:focus-visible .name {
   }
   .app {
     grid-template-columns: minmax(0, 1fr) var(--side-w);
-    /* 1行目は盤面の上のステータス帯、2行目に盤面と右カラムを収める */
-    grid-template-rows: auto minmax(0, 1fr);
+    /* 盤面と右カラムを1行に収める（帯は盤面ビューの内側に重なるため行は取らない） */
+    grid-template-rows: minmax(0, 1fr);
     height: 100vh;
     height: 100dvh;
     align-items: stretch;
     padding-block: 10px;
     gap: 12px;
   }
-  /* 帯は盤面の真上。右カラムは帯の行も含めて全高を使い、内部スクロールさせる */
-  .status-strip {
-    grid-column: 1;
-    grid-row: 1;
-  }
   /* 盤面は左カラムいっぱいに広げる（マスは幅÷9が効くので、横向きでは幅が大きく取れる） */
   .board-view {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 1;
     width: 100%;
     height: 100%;
   }
