@@ -3,7 +3,51 @@
 // マスの選択は Raycaster で拾い、view.ts のタイルタップと同じ入口へ渡す。
 
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BOARD, GROUPS, Square } from '../data/board';
+import treeShrineB64 from '../assets/models/ancient-tree-shrine.glb.b64?raw';
+import lighthouseB64 from '../assets/models/sunken-lighthouse.glb.b64?raw';
+import dragonBoneB64 from '../assets/models/dragon-bone-valley.glb.b64?raw';
+import skyIslandB64 from '../assets/models/sky-island.glb.b64?raw';
+
+/**
+ * 観光地の名前準拠モデル（GLB を Base64 で同梱し、メモリ上でパースする）。
+ * 用意が終わるまでは従来の金のオベリスクを表示し、成功したら差し替える。
+ * 失敗した場合はオベリスクのまま（ゲームは止めない）。
+ */
+const TOURIST_MODELS: Record<string, { b64: string; scale: number; rotY?: number }> = {
+  '古代樹の神殿': { b64: treeShrineB64, scale: 0.8 },
+  '沈んだ灯台': { b64: lighthouseB64, scale: 0.8 },
+  '竜骨の谷': { b64: dragonBoneB64, scale: 1.0, rotY: -0.6 },
+  '天空の浮島': { b64: skyIslandB64, scale: 0.85 },
+};
+const touristModelSlots = new Map<string, { slot: THREE.Group; fallback: THREE.Group }>();
+
+function loadTouristModels(): void {
+  const loader = new GLTFLoader();
+  for (const [name, cfg] of Object.entries(TOURIST_MODELS)) {
+    try {
+      const bin = atob(cfg.b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      loader.parse(
+        bytes.buffer,
+        '',
+        (gltf) => {
+          const entry = touristModelSlots.get(name);
+          if (!entry) return;
+          entry.slot.remove(entry.fallback);
+          const m = gltf.scene;
+          m.scale.setScalar(cfg.scale);
+          m.rotation.y = cfg.rotY ?? 0;
+          m.position.y = TILE_H;
+          entry.slot.add(m);
+        },
+        () => { /* パース失敗時はオベリスク表示のまま */ },
+      );
+    } catch { /* 同上 */ }
+  }
+}
 import { landPrice, rentOf, type GameState } from '../core/game';
 
 /** view.ts から渡される同期情報（DOMタイルの選択可否・強調と同じ状態） */
@@ -152,12 +196,18 @@ function buildMonument(sq: Square): THREE.Group | null {
       return g;
     }
     case 'tourist': {
-      // 金のオベリスク
-      g.add(box(0.36, 0.14, 0.36, mat('#8a744a'), 0, TILE_H + 0.07, 0));
+      // 金のオベリスク（名前準拠モデルがある観光地は、読み込み完了まで
+      // これを表示し、完了後にモデルへ差し替える）
+      const fallback = new THREE.Group();
+      fallback.add(box(0.36, 0.14, 0.36, mat('#8a744a'), 0, TILE_H + 0.07, 0));
       const ob = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.68, 4), gold);
       ob.position.y = TILE_H + 0.14 + 0.34;
       ob.rotation.y = Math.PI / 4;
-      g.add(ob);
+      fallback.add(ob);
+      g.add(fallback);
+      if (sq.name in TOURIST_MODELS) {
+        touristModelSlots.set(sq.name, { slot: g, fallback });
+      }
       return g;
     }
     case 'island': {
@@ -472,6 +522,7 @@ export class Board3D {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.domElement.classList.add('board-3d-canvas');
     holder.append(this.renderer.domElement);
+    loadTouristModels();
 
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
     this.scene.background = new THREE.Color('#26334d');
