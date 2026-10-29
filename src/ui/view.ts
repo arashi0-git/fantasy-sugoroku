@@ -274,24 +274,17 @@ export class View {
     private handEl: HTMLElement,
     private h: ViewHandlers,
   ) {
-    // カメラ追尾モードで盤面を拡大・移動してもはみ出さないよう、盤面をビューポート（.board-view）で包む
+    // 3D盤面のキャンバスを盤面と同じ大きさで重ねられるよう、盤面をビューポート（.board-view）で包む
     const boardView = el('div', 'board-view');
     this.boardEl.parentElement?.insertBefore(boardView, this.boardEl);
     boardView.append(this.boardEl);
-    // 3D盤面の置き場所（2D盤面の下に敷き、3D表示のときだけ2Dのマスを消して見せる）
+    // 3D盤面の置き場所（盤面の下に敷く。DOMのマスは同期元として裏に残し、見せない）
     const holder3d = el('div', 'board-3d');
-    holder3d.hidden = true;
     boardView.append(holder3d);
     this.board3dHolder = holder3d;
-    this.initCameraDrag();
-    // 盤面の大きさが変わったら、パネルの置き場所を決め直して描き直す
-    new ResizeObserver(() => {
-      const compact = this.boardEl.clientWidth < View.COMPACT_BOARD;
-      if (compact !== this.compact) {
-        this.compact = compact;
-        if (this.last) this.render(...this.last);
-      }
-    }).observe(this.boardEl);
+    // 盤面表示は3Dのみ。タイトル画面のうちにモジュールと盤面を先読みして、
+    // 対戦が始まる頃には読み込みの成否が確定している状態にする
+    this.preloadBoard3d();
     for (const sq of BOARD) {
       const { row, col, side } = placement(sq.index);
       const tile = el('div', `tile side-${side} kind-${sq.kind}`);
@@ -346,8 +339,7 @@ export class View {
 
   /**
    * 歯車ボタンと設定パネルを作る。歯車は横の列のいちばん上に常時出し、
-   * パネルには対戦速度／見え方（カメラ・チルト）／効果音／表示（2D・3D）をまとめる。
-   * 「3D風」チルトと「カメラ」追尾は併用せず、どちらか一方だけが有効（従来どおり）。
+   * パネルには対戦速度と効果音をまとめる（盤面表示は3Dのみで、切り替えはない）。
    * パネルは確認ダイアログと違い、開いている間も対戦はそのまま進む。
    */
   private buildSettings() {
@@ -400,26 +392,6 @@ export class View {
     speedRow.append(el('span', 'speed-label', '対戦速度'), speedGroup);
     box.append(speedRow);
 
-    // 見え方（カメラ追尾／3D風チルト）
-    const camBtn = el('button', 'tilt-btn', 'カメラ');
-    camBtn.type = 'button';
-    camBtn.title = 'カメラ追尾：手番の人のコマを中心に、盤面を拡大して追いかけます';
-    const tiltBtn = el('button', 'tilt-btn', '3D風');
-    tiltBtn.type = 'button';
-    tiltBtn.title = '3D風：盤面を少し傾けて立体感を出します（カメラ追尾とは同時には使えません）';
-    const viewGroup = el('div', 'speed-bar');
-    viewGroup.setAttribute('role', 'group');
-    viewGroup.setAttribute('aria-label', '盤面の見え方');
-    viewGroup.append(camBtn, tiltBtn);
-    // 3D表示の間は見え方（2D盤面のカメラ・チルト）は使えない。その理由を注記する
-    const viewNote = el('span', 'settings-note', '3D表示中は自動カメラになります');
-    viewNote.hidden = true;
-    const viewRight = el('div', 'settings-right');
-    viewRight.append(viewGroup, viewNote);
-    const viewRow = el('div', 'settings-row');
-    viewRow.append(el('span', 'speed-label', '見え方'), viewRight);
-    box.append(viewRow);
-
     // 効果音（実体は sound 側が受け口越しに持つ）
     const soundBtn = el('button', 'settings-sound', '');
     soundBtn.type = 'button';
@@ -430,30 +402,6 @@ export class View {
     const soundRow = el('div', 'settings-row');
     soundRow.append(el('span', 'speed-label', '効果音'), soundBtn);
     box.append(soundRow);
-
-    // 表示（2D／3D盤面の切り替え。3Dは Three.js の盤面で、カメラは手番のコマを自動で追う）
-    const dispBtns = new Map<'2d' | '3d', HTMLButtonElement>();
-    const dispGroup = el('div', 'speed-bar');
-    dispGroup.setAttribute('role', 'group');
-    dispGroup.setAttribute('aria-label', '盤面の表示');
-    const dispChoices: ['2d' | '3d', string][] = [
-      ['2d', '2D'],
-      ['3d', '3D'],
-    ];
-    for (const [mode, label] of dispChoices) {
-      const b = el('button', '', label);
-      b.type = 'button';
-      if (mode === '3d') b.title = '3D表示：盤面を立体で表示します（読み込みに少し時間がかかります）';
-      b.addEventListener('click', () => {
-        this.setViewMode(mode);
-        this.syncSettings?.();
-      });
-      dispBtns.set(mode, b);
-      dispGroup.append(b);
-    }
-    const dispRow = el('div', 'settings-row');
-    dispRow.append(el('span', 'speed-label', '表示'), dispGroup);
-    box.append(dispRow);
 
     const foot = el('div', 'settings-foot');
     const done = el('button', 'btn quiet', '閉じる');
@@ -472,32 +420,10 @@ export class View {
     document.body.append(overlay);
     this.settingsEl = overlay;
 
-    const setTilt = (on: boolean) => {
-      document.body.classList.toggle('tilt-on', on);
-      try {
-        window.localStorage.setItem('fs-tilt', on ? '1' : '0');
-      } catch {
-        /* 保存できなくても切り替え自体は有効 */
-      }
-    };
     const sync = () => {
       const speed = this.settingsHooks?.getSpeed() ?? 'normal';
       for (const [mode, b] of speedBtns) {
         const active = mode === speed;
-        b.classList.toggle('active', active);
-        b.setAttribute('aria-pressed', String(active));
-      }
-      const tilt = document.body.classList.contains('tilt-on');
-      tiltBtn.classList.toggle('active', tilt);
-      tiltBtn.setAttribute('aria-pressed', String(tilt));
-      camBtn.classList.toggle('active', this.cameraOn);
-      camBtn.setAttribute('aria-pressed', String(this.cameraOn));
-      // 3D表示の間、見え方（2D盤面のカメラ・チルト）は無効。押せないようにして注記を出す
-      camBtn.disabled = this.view3d;
-      tiltBtn.disabled = this.view3d;
-      viewNote.hidden = !this.view3d;
-      for (const [mode, b] of dispBtns) {
-        const active = (mode === '3d') === this.view3d;
         b.classList.toggle('active', active);
         b.setAttribute('aria-pressed', String(active));
       }
@@ -506,27 +432,6 @@ export class View {
       soundBtn.setAttribute('aria-pressed', String(sound));
     };
     this.syncSettings = sync;
-    try {
-      // 両方とも保存されていたら、カメラを優先する（併用はしない仕様）
-      if (window.localStorage.getItem('fs-cam') === '1') this.setCamera(true);
-      else if (window.localStorage.getItem('fs-tilt') === '1') document.body.classList.add('tilt-on');
-      // 表示モードの復元（既定は2D）
-      if (window.localStorage.getItem('fs-view') === '3d') this.setViewMode('3d');
-    } catch {
-      /* 保存できない環境では初期値オフのまま */
-    }
-    tiltBtn.addEventListener('click', () => {
-      const on = !document.body.classList.contains('tilt-on');
-      if (on && this.cameraOn) this.setCamera(false);
-      setTilt(on);
-      sync();
-    });
-    camBtn.addEventListener('click', () => {
-      const on = !this.cameraOn;
-      if (on) setTilt(false);
-      this.setCamera(on);
-      sync();
-    });
     sync();
   }
 
@@ -541,92 +446,76 @@ export class View {
     this.settingsEl.hidden = true;
   }
 
-  // ---- 3D盤面モード（Three.js） ----
-  /** 3D表示かどうか。保存キーは fs-view（'3d' のときだけ3D、既定は2D） */
-  private view3d = false;
+  // ---- 3D盤面（Three.js） ----
   /** 3D盤面の置き場所（コンストラクタで .board-view の中に作る） */
   private board3dHolder!: HTMLElement;
-  /** 3D盤面の本体。3D表示を初めて選んだときに動的 import で読み込む */
+  /** 3D盤面の本体。コンストラクタで先読みして用意する */
   private board3d: Board3D | null = null;
-  private board3dLoading: Promise<void> | null = null;
+  /** 先読みの結果（成功なら true）。コンストラクタで開始し、タイトル表示中に確定する */
+  private board3dReady!: Promise<boolean>;
+  /** 先読みが失敗した印（モジュールの読み込み失敗、または WebGL が使えない） */
+  private board3dFailed = false;
+  /** 先読みの成否が既に確定したかどうか */
+  private board3dDone = false;
   /**
-   * 読み込み待ちがタイムアウトした印。盤面が遅れて生成されたとき、
-   * 消費済みロールの出目をアニメーションなしで表示するために使う
+   * 盤面を表示する画面（対戦）にいるかどうか。初期化（先読み）と有効化は分ける：
+   * 盤面の用意はタイトル表示中に済ませるが、描画ループは対戦画面の間だけ回す。
+   * 先読み完了前はここへ貯めておき、完了時に反映する
    */
-  private board3dSnapDice = false;
-  /** 読み込み待ちが一度タイムアウトした印。以後のロールでは同じ読み込みを待たない */
-  private board3dLoadTimedOut = false;
+  private boardWanted = false;
+  /** 先読みの成否が確定したときの通知先（main がタイトルのエラー表示を切り替える） */
+  private boardStatusHandler: ((ok: boolean) => void) | null = null;
 
   /**
-   * 盤面の表示（2D／3D）を切り替える。
-   * 3D表示の間、2D側のカメラ追尾・チルトは無効として扱う（保存値はそのまま残し、2Dに戻すと復活する）。
-   * 3D側のカメラは手番のコマを自動で追うので、設定が矛盾することはない。
+   * 3D盤面の先読みの成否が確定したら呼ばれる受け口を登録する。
+   * 既に確定していたら、登録した時点で即座に呼ばれる
    */
-  private setViewMode(mode: '2d' | '3d') {
-    const on = mode === '3d';
-    this.view3d = on;
-    document.body.classList.toggle('view-3d', on);
-    this.board3dHolder.hidden = !on;
-    try {
-      window.localStorage.setItem('fs-view', on ? '3d' : '2d');
-    } catch {
-      /* 保存できなくても切り替え自体は有効 */
-    }
-    if (on) this.ensureBoard3d();
-    else this.board3d?.setActive(false);
-    if (this.last) this.render(...this.last);
-    this.syncSettings?.();
+  setBoardStatusHandler(h: (ok: boolean) => void) {
+    this.boardStatusHandler = h;
+    if (this.board3dDone) h(!this.board3dFailed);
+  }
+
+  /** 3D盤面の読み込みに失敗しているか（成否が未確定の間は false） */
+  get boardFailed(): boolean {
+    return this.board3dFailed;
+  }
+
+  /** 先読みがまだ終わっていないか（対戦開始の可否を一元管理する main が使う） */
+  get boardPending(): boolean {
+    return !this.board3dDone;
+  }
+
+  /** 先読みが成功して、対戦を始められる状態か */
+  get boardReadyNow(): boolean {
+    return this.board3dDone && !this.board3dFailed;
   }
 
   /**
-   * サイコロの出目が確定し、演出が終わるまで待つ（main がコマ移動の開始を合わせるために使う）。
-   * 3Dでは中央のサイコロが止まるまでアニメーションが続くので、その完了を待つ。
-   * 2Dでは出目は即座に確定表示になるため、待たない
+   * 3D盤面の描画ループを回すかどうかを切り替える。
+   * 呼び出しは画面遷移のタイミングに限る：対戦画面に入るとき（main の goTo('game')／
+   * begin）true、それ以外の画面（タイトル／選択／ガチャ／コレクション）では false にし、
+   * 画面の裏で WebGL の描画を回し続けて CPU/GPU を消費しないようにする。
+   * ゲーム状態の再描画（render）からは呼ばない：対戦離脱後に残ったコールバックが
+   * render を呼んでもループは再開せず、逆に履歴で対戦へ戻ったときは goTo 側の
+   * 遷移で確実に再開する
    */
-  async diceSettled(): Promise<void> {
-    if (!this.view3d) return;
-    if (!this.board3d && this.board3dLoading && !this.board3dLoadTimedOut) {
-      // 3Dモジュールの読み込み中にロールが終わった場合、そのまま進めると
-      // 読み込み完了時に始まるセトルアニメーションの最中にコマが動き出してしまう。
-      // 読み込みを待ってから表示モードを再確認し、改めてセトルを待つ。
-      // ただし読み込みには上限を設ける：接続が止まったままだと import は
-      // 成功も失敗もせず、手番が無期限に止まる（ソフトロック）ため。
-      // 超えたら、この読み込みは以後待たず、そのロールは2Dとして進める
-      const loaded = await View.withTimeout(this.board3dLoading, View.BOARD3D_LOAD_WAIT_MS);
-      if (!loaded) {
-        this.board3dLoadTimedOut = true;
-        // 遅れて盤面が生成されても、消費済みロールのセトルを再生しないよう印を付ける
-        if (!this.board3d) this.board3dSnapDice = true;
-      }
-    }
-    if (this.view3d && this.board3d) await this.board3d.whenDiceSettled();
+  setBoardWanted(on: boolean) {
+    this.boardWanted = on;
+    this.board3d?.setActive(on);
+  }
+
+  /** 先読みが終わるまで待ち、成功なら true を返す */
+  waitBoardReady(): Promise<boolean> {
+    return this.board3dReady;
   }
 
   /**
-   * 3Dモジュール読み込み待ちの上限（ms）。
-   * チャンク（three.js込み）は gzip で約140KB。低速回線（400kbps級）でも
-   * 約3秒で届く計算で、これを超えたら「遅い」ではなく「止まった」とみなす。
-   * セトルの見栄えより、手番が止まらないことを優先するための上限
+   * 3Dモジュールを読み込んで盤面を用意する（コンストラクタから一度だけ呼ぶ）。
+   * 失敗しても例外は外へ出さず、board3dFailed に記録する。2Dへの代替表示はしない：
+   * 盤面表示は3Dのみで、失敗した場合は main がタイトルでエラーを出し、対戦を始めさせない
    */
-  private static readonly BOARD3D_LOAD_WAIT_MS = 3000;
-
-  /** プロミスが ms 以内に解決すれば true、超えたら false（プロミス自体は止めない） */
-  private static withTimeout(p: Promise<void>, ms: number): Promise<boolean> {
-    return Promise.race([
-      p.then(() => true),
-      new Promise<boolean>((r) => setTimeout(() => r(false), ms)),
-    ]);
-  }
-
-  /** 3D盤面モジュールを読み込んで用意する（読み込めなければ2Dに戻す） */
-  private ensureBoard3d() {
-    if (this.board3d) {
-      this.board3d.setActive(true);
-      return;
-    }
-    if (this.board3dLoading) return;
-    this.board3dLoadTimedOut = false;
-    this.board3dLoading = (async () => {
+  private preloadBoard3d() {
+    this.board3dReady = (async () => {
       try {
         const { Board3D } = await import('./board3d');
         this.board3d = new Board3D(
@@ -634,135 +523,27 @@ export class View {
           BOARD.map((sq) => placement(sq.index)),
           (i) => this.tapSquare(i),
         );
-        // 読み込み待ちがタイムアウトしたロールがある場合、その出目は
-        // アニメーションなしで表示する（終わったロールのセトルを遅れて再生しない）。
-        // ロール中なら印だけ消し、生きたロールの演出に任せる
-        if (this.board3dSnapDice) {
-          this.board3dSnapDice = false;
-          const x = this.last?.[1];
-          if (x && !x.rolling && x.dice) this.board3d.snapDice(x.dice);
-        }
-        if (this.view3d) {
-          this.board3d.setActive(true);
-          if (this.last) this.render(...this.last);
-        }
+        // 用意ができてもすぐには描画を始めない。有効化は対戦画面に入ってから（setBoardWanted）
+        this.board3d.setActive(this.boardWanted);
+        if (this.last) this.render(...this.last);
+        return true;
       } catch {
-        this.board3dLoading = null;
-        if (this.view3d) this.setViewMode('2d');
+        this.board3dFailed = true;
+        return false;
+      } finally {
+        this.board3dDone = true;
+        this.boardStatusHandler?.(!this.board3dFailed);
       }
     })();
   }
 
-  // ---- カメラ追尾モード ----
-  /** カメラの拡大倍率。2倍だと寄りすぎて盤面の情報が見えにくいという声があり、1.6倍に弱めた */
-  private static readonly CAMERA_SCALE = 1.6;
-  private cameraOn = false;
-  /** カメラがいま中央に置いているマス（変わったら自由視点のずれをリセットする） */
-  private camSquare = -1;
-  /** ドラッグでずらした自由視点のずれ（px）。次のコマ移動で自動的に追尾へ戻る */
-  private camFree = { x: 0, y: 0 };
-  private camDragStart: { x: number; y: number; fx: number; fy: number } | null = null;
-  private camDragged = false;
-  /** ドラッグ直後のクリックを、マスのタップとして扱わないための印 */
-  private camSuppressClick = false;
-
-  /** カメラ追尾のオン／オフ。オンにするとチルトは外れる（併用しない）。盤面の transform はカメラが管理する */
-  private setCamera(on: boolean) {
-    this.cameraOn = on;
-    document.body.classList.toggle('cam-on', on);
-    try {
-      window.localStorage.setItem('fs-cam', on ? '1' : '0');
-    } catch {
-      /* 保存できなくても切り替え自体は有効 */
-    }
-    if (on) {
-      if (document.body.classList.contains('tilt-on')) {
-        document.body.classList.remove('tilt-on');
-        try {
-          window.localStorage.setItem('fs-tilt', '0');
-        } catch {
-          /* 保存できなくても切り替え自体は有効 */
-        }
-      }
-      this.camSquare = -1;
-      this.camFree = { x: 0, y: 0 };
-    } else {
-      this.boardEl.style.transform = '';
-      this.boardEl.style.transformOrigin = '';
-    }
-    // パネルの置き場所（中央か横の列か）がカメラの有無で変わるので、描き直して追いつかせる
-    if (this.last) this.render(...this.last);
-    this.syncSettings?.();
-  }
-
   /**
-   * カメラの transform を、手番の人のコマがビューポート中央に来るよう設定する。
-   * 端ではクランプして、拡大した盤面がビューポートからはみ出して余白にならないようにする。
+   * サイコロの出目が確定し、演出が終わるまで待つ（main がコマ移動の開始を合わせるために使う）。
+   * 盤面中央の3Dサイコロが止まるまでアニメーションが続くので、その完了を待つ。
+   * 盤面の先読みは対戦開始前に確定しているため、読み込み待ちはここでは発生しない
    */
-  private applyCamera(s: GameState, x: ViewExtras) {
-    const target = x.shownPositions[s.current];
-    if (target === undefined) return;
-    const tile = this.tiles[target];
-    const W = this.boardEl.clientWidth;
-    const H = this.boardEl.clientHeight;
-    if (!tile || !W || !H) return;
-    // 追うコマが変わったら、自由視点のずれは捨てて追尾に戻る
-    if (target !== this.camSquare) {
-      this.camSquare = target;
-      this.camFree = { x: 0, y: 0 };
-    }
-    const S = View.CAMERA_SCALE;
-    const cx = tile.offsetLeft + tile.offsetWidth / 2;
-    const cy = tile.offsetTop + tile.offsetHeight / 2;
-    const baseX = W / 2 - S * cx;
-    const baseY = H / 2 - S * cy;
-    const dx = Math.min(0, Math.max(W * (1 - S), baseX + this.camFree.x));
-    const dy = Math.min(0, Math.max(H * (1 - S), baseY + this.camFree.y));
-    // クランプで削られた分は自由視点のずれから引いておく（端で引っかからずに戻ってこられるように）
-    this.camFree = { x: dx - baseX, y: dy - baseY };
-    this.boardEl.style.transformOrigin = '0 0';
-    this.boardEl.style.transform = `translate(${dx}px, ${dy}px) scale(${S})`;
-  }
-
-  /** カメラモード中のドラッグ自由視点。動かしたあとのクリックはマスのタップにしない */
-  private initCameraDrag() {
-    this.boardEl.addEventListener('pointerdown', (e) => {
-      if (!this.cameraOn || e.button !== 0) return;
-      this.camDragStart = { x: e.clientX, y: e.clientY, fx: this.camFree.x, fy: this.camFree.y };
-      this.camDragged = false;
-    });
-    window.addEventListener('pointermove', (e) => {
-      const start = this.camDragStart;
-      if (!start || !this.cameraOn) return;
-      const dx = e.clientX - start.x;
-      const dy = e.clientY - start.y;
-      if (!this.camDragged && Math.abs(dx) + Math.abs(dy) < 6) return;
-      this.camDragged = true;
-      document.body.classList.add('cam-drag');
-      this.camFree = { x: start.fx + dx, y: start.fy + dy };
-      if (this.last) this.applyCamera(this.last[0], this.last[1]);
-    });
-    window.addEventListener('pointerup', () => {
-      if (this.camDragStart && this.camDragged) this.camSuppressClick = true;
-      this.camDragStart = null;
-      this.camDragged = false;
-      document.body.classList.remove('cam-drag');
-    });
-    // ドラッグの締めのクリックがタイルに届く前に止める（キャプチャ段階）
-    this.boardEl.addEventListener(
-      'click',
-      (e) => {
-        if (this.camSuppressClick) {
-          this.camSuppressClick = false;
-          e.stopPropagation();
-          e.preventDefault();
-        }
-      },
-      true,
-    );
-    window.addEventListener('resize', () => {
-      if (this.cameraOn && this.last) this.applyCamera(this.last[0], this.last[1]);
-    });
+  async diceSettled(): Promise<void> {
+    if (this.board3d) await this.board3d.whenDiceSettled();
   }
 
   /** 縦向きのスマホで対戦画面を開いている間だけ出す「横画面が見やすいよ」の小さな案内 */
@@ -944,9 +725,6 @@ export class View {
   }
 
   private human = 0;
-  /** 盤面がこの幅（px）より小さいときは、操作パネルを盤面の中に収めず、横の列（スマホでは盤面の下）に出す */
-  private static readonly COMPACT_BOARD = 760;
-  private compact = false;
   private last: [GameState, ViewExtras] | null = null;
 
   /** 使おうとしている攻めのカード（対象を選んでいる途中）。場面が変わったら取り消す */
@@ -960,6 +738,10 @@ export class View {
   private pendingKey = '';
 
   render(s: GameState, x: ViewExtras) {
+    // 描画ループの有効化はここでは行わない。有効／停止は画面遷移（main の goTo／
+    // begin と、各画面の表示メソッド）から setBoardWanted で駆動する。
+    // 対戦を離れたあとに残ったコールバックが render を呼んでも、裏でループが
+    // 再開しないようにするため
     this.last = [s, x];
     this.human = x.human;
     // いま決めるのがあなたか（守りのカードの割り込みでは、相手の手番でもあなたが決めることがある）
@@ -980,11 +762,9 @@ export class View {
     this.renderPlayers(s, x);
     this.renderLog(s, x);
     if (this.detailSquare !== null) this.refreshDetail(s);
-    // カメラモードでは、手番の人のコマに盤面を追従させる（コマの移動アニメーションのたびに呼ばれる）
-    // 3D表示の間は2Dカメラは使わない（3D側のカメラが追従する）
-    if (this.cameraOn && !this.view3d) this.applyCamera(s, x);
-    // 3D表示では、DOMタイルに付けた選択可否・強調をそのまま3D側へ渡して同期する
-    if (this.view3d && this.board3d) {
+    // DOMタイルに付けた選択可否・強調をそのまま3D側へ渡して同期する
+    // （カメラの追従は3D側が担う）
+    if (this.board3d) {
       const selectable = new Set<number>();
       let highlight = -1;
       this.tiles.forEach((t, i) => {
@@ -1103,7 +883,8 @@ export class View {
       if (pickable) {
         tile.tabIndex = 0;
         tile.setAttribute('role', 'button');
-        tile.removeAttribute('aria-label');
+        // マスの中身はCSSで隠しているため、支援技術向けの名前は aria-label で明示する
+        tile.setAttribute('aria-label', `${sq.name}を選ぶ`);
       } else if (!sel) {
         // 対象選択中でないときは、タップで詳細を開けるボタンとして扱う
         tile.tabIndex = 0;
@@ -1304,20 +1085,15 @@ export class View {
   }
 
   private renderCenter(s: GameState, x: ViewExtras, myTurn: boolean) {
-    const c = this.centerEl;
-    c.replaceChildren();
+    this.centerEl.replaceChildren();
     this.dockEl.replaceChildren();
-    // お知らせと操作パネルの置き場所：盤面が大きければ中央、小さければ横の列（スマホでは盤面の下）。
-    // カメラモード・3D表示では盤面の中央が見えないことがあるので、常に横の列に出す
-    this.compact = this.boardEl.clientWidth < View.COMPACT_BOARD;
-    const host = this.compact || this.cameraOn || this.view3d ? this.dockEl : c;
-    // 3D表示では盤面の中央は3Dそのものが占め、2Dの空き地のような余白がない。
-    // タイトルは出さず、ターン・手番・順番は横の列（スマホでは盤面の下）の先頭に
-    // 帯として出して、3Dのマスやラベルと重ならないようにする。
+    // 盤面の中央は3Dそのものが占め、空き地のような余白がない。
+    // お知らせと操作パネルはすべて横の列（スマホでは盤面の下）に出し、
+    // ターン・手番・順番はその先頭に帯として出して、3Dのマスやラベルと重ならないようにする。
     // サイコロは3D側が盤面中央（リングの空きスペース）に出すので、DOMでは出さない
-    const status: HTMLElement = this.view3d ? el('div', 'center-status') : c;
-    if (this.view3d) host.append(status);
-    else c.append(el('h1', 'title', 'ファンタジーすごろく'));
+    const host = this.dockEl;
+    const status = el('div', 'center-status');
+    host.append(status);
     status.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
     if (s.phase.kind === 'gameover') {
@@ -1338,13 +1114,10 @@ export class View {
     status.append(whose);
     status.append(this.orderBar(s, x));
 
-    // 3D表示のサイコロは board3d 側（盤面中央の3Dサイコロ）が担う
-    if (!this.view3d) status.append(this.dice(x));
-
     // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）。
-    // カメラモード・3D表示では盤面の中央が見えないことがあるので、出来事の帯も横の列に出す
+    // 盤面の中央は3Dが占めるので、出来事の帯も横の列に出す
     const banner = this.eventBanner(s, x);
-    if (banner) (this.cameraOn || this.view3d ? host : c).append(banner);
+    if (banner) host.append(banner);
 
     // CPU の一言（演出中も出す）
     // カードの結果が同じ人のものなら、吹き出しの下にまとめて場所を節約する
@@ -1383,18 +1156,6 @@ export class View {
           ? this.cardTargetPanel(s, this.pendingCard)
           : this.phasePanel(s, myTurn);
     if (panel) host.append(panel);
-
-    // 盤面の中央に収まりきらないとき：まず前の人のカードのお知らせを省き、それでもあふれるなら横の列へ移す
-    if (host === c && c.scrollHeight > c.clientHeight + 1) {
-      const card = c.querySelector(':scope > .card-notice:not(.mission)');
-      if (card && s.lastCard && s.lastCard.player !== s.current) card.remove();
-      if (c.scrollHeight > c.clientHeight + 1) {
-        const keep = new Set(['title', 'turn', 'whose', 'dice', 'event-banner']);
-        for (const node of [...c.children]) {
-          if (![...node.classList].some((k) => keep.has(k))) this.dockEl.append(node);
-        }
-      }
-    }
   }
 
   /** このターンの順番（今動いている人を強調、終わった人は薄く） */
@@ -2403,27 +2164,6 @@ export class View {
     return g;
   }
 
-  private dice(x: ViewExtras): HTMLElement {
-    const PIPS: Record<number, number[]> = {
-      1: [4],
-      2: [0, 8],
-      3: [0, 4, 8],
-      4: [0, 2, 6, 8],
-      5: [0, 2, 4, 6, 8],
-      6: [0, 2, 3, 5, 6, 8],
-    };
-    const wrap = el('div', 'dice');
-    wrap.setAttribute('aria-live', 'polite');
-    const values = x.dice ?? [1, 1];
-    wrap.setAttribute('aria-label', x.dice ? `出目 ${values[0]} と ${values[1]}` : 'サイコロ');
-    for (const v of values) {
-      const die = el('div', 'die' + (x.rolling ? ' rolling' : ''));
-      for (let k = 0; k < 9; k++) die.append(el('span', PIPS[v].includes(k) ? 'on' : ''));
-      wrap.append(die);
-    }
-    return wrap;
-  }
-
   private resultPanel(s: GameState, x: ViewExtras): HTMLElement {
     if (s.phase.kind !== 'gameover') throw new Error();
     const winner = s.players[s.phase.winner];
@@ -2573,8 +2313,13 @@ export class View {
     return row;
   }
 
-  /** 起動直後のタイトル画面。「はじめる」でキャラ選びへ進む */
-  showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null) {
+  /**
+   * 起動直後のタイトル画面。「はじめる」でキャラ選びへ進む。
+   * boardError=true（3D盤面の先読みに失敗した状態）ではエラーを出し、
+   * 「はじめる」を押せなくする（2Dへの代替表示はせず、対戦を始めさせない）
+   */
+  showTitle(host: HTMLElement, onStart: () => void, profile?: Profile | null, boardError = false) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
@@ -2594,11 +2339,29 @@ export class View {
     const icons = el('p', 'title-icons');
     icons.append(el('span', '', '🎲'), el('span', '', '🏰'), el('span', '', '🪙'));
     wrap.append(icons);
+    if (boardError) {
+      wrap.append(
+        el('p', 'title-error', '3Dを表示できませんでした。お使いのブラウザが WebGL に対応していない可能性があります。'),
+      );
+    }
     const startBtn = el('button', 'title-start', 'ゲームをはじめる');
-    startBtn.addEventListener('click', () => {
-      host.hidden = true;
-      onStart();
-    });
+    if (boardError) {
+      startBtn.disabled = true;
+    } else if (!this.board3dDone) {
+      // 先読みが終わるまでは「読み込み中」で押せなくする。クリックと同時にタイトルを
+      // 消してしまうと、準備ができるまで未初期化の画面が露出してしまうため、
+      // タイトルは表示したままにし、遷移は準備完了後に main 側が行う
+      startBtn.disabled = true;
+      startBtn.textContent = '読み込み中…';
+      void this.board3dReady.then((ok) => {
+        // 失敗時は main がタイトルを作り直してエラーを出すので、ここでは成功時だけ戻す。
+        // 作り直し済み（DOMから外れた）ボタンには触らない
+        if (!ok || !startBtn.isConnected) return;
+        startBtn.disabled = false;
+        startBtn.textContent = 'ゲームをはじめる';
+      });
+    }
+    startBtn.addEventListener('click', () => onStart());
     wrap.append(startBtn);
     // ガチャ・コレクションへの導線は下部タブバーに一本化した（タイトル内のボタンは置かない）
     const howBtn = el('button', 'title-how', 'あそびかた');
@@ -2624,6 +2387,7 @@ export class View {
 
   /** ゲーム開始前のキャラ選び。profile があれば未所持キャラをロックし、所持キャラにレベルを出す */
   showCharacterSelect(host: HTMLElement, onPick: (id: CharacterId) => void, profile?: Profile | null) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
@@ -2680,6 +2444,7 @@ export class View {
 
   /** ガチャ画面。回す→光る→結果、の短い演出つき */
   showGacha(host: HTMLElement, profile: Profile, h: GachaHandlers) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;
@@ -2767,6 +2532,7 @@ export class View {
 
   /** コレクション画面。見た目アイテムの装備と、所持キャラのレベル確認ができる */
   showCollection(host: HTMLElement, profile: Profile, h: CollectionHandlers) {
+    this.setBoardWanted(false);
     this.closeDetail();
     host.replaceChildren();
     host.hidden = false;

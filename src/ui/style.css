@@ -336,46 +336,6 @@ button:focus-visible {
   vertical-align: -0.05em;
 }
 
-.dice {
-  display: flex;
-  gap: 14px;
-}
-
-.die {
-  width: clamp(44px, calc(var(--board) * 0.085), 68px);
-  aspect-ratio: 1;
-  background: var(--stone);
-  border-radius: 14%;
-  display: grid;
-  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
-  padding: 14%;
-  box-shadow: 0 3px 0 var(--stone-shade);
-}
-
-.die span {
-  border-radius: 50%;
-  margin: 12%;
-}
-.die span.on {
-  background: var(--ink);
-}
-
-.die.rolling {
-  animation: shake 90ms linear infinite;
-}
-
-@keyframes shake {
-  0% {
-    transform: rotate(-8deg) translateY(-2px);
-  }
-  50% {
-    transform: rotate(8deg) translateY(1px);
-  }
-  100% {
-    transform: rotate(-8deg) translateY(-2px);
-  }
-}
-
 .panel {
   background: var(--table-deep);
   border-radius: 10px;
@@ -1012,6 +972,22 @@ button:focus-visible {
   display: flex;
   gap: 22px;
   font-size: 30px;
+}
+/* 3D盤面の先読みに失敗したときのエラー（この状態では「はじめる」は押せない） */
+.title-error {
+  margin: 0;
+  max-width: 34em;
+  padding: 10px 14px;
+  border: 1px solid #d8453a;
+  border-radius: 10px;
+  background: rgb(216 69 58 / 0.14);
+  color: #ffb3ab;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.title-start:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .title-start {
   margin-top: 10px;
@@ -1717,16 +1693,6 @@ button.hand-card:hover:not(:disabled) {
   border-color: var(--brass);
   font-weight: 700;
 }
-/* 設定行の右側（ボタン群＋注記を縦に並べる） */
-.settings-right {
-  display: grid;
-  justify-items: end;
-  gap: 4px;
-}
-.settings-note {
-  font-size: 11px;
-  color: var(--on-table-soft);
-}
 .speed-bar button:disabled {
   opacity: 0.38;
   cursor: default;
@@ -1871,9 +1837,6 @@ button.hand-card:hover:not(:disabled) {
     box-shadow: 0 -10px 12px -6px var(--table);
   }
 
-  .die {
-    width: 36px;
-  }
   .gauge {
     height: 34px;
   }
@@ -1882,11 +1845,7 @@ button.hand-card:hover:not(:disabled) {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .die.rolling {
-    animation: none;
-  }
-}
+
 
 /* ---------- CPU の一言 ---------- */
 
@@ -2466,97 +2425,23 @@ button.hand-card:hover:not(:disabled) {
   opacity: 0.5;
 }
 
-/* ---------- 3D風チルト表示（盤面を斜め見下ろしに倒す任意モード） ---------- */
+/* ---------- 3D盤面（Three.js） ---------- */
 
-.board {
-  transition: transform 0.3s ease;
-}
-body.tilt-on .app {
-  perspective: 1000px;
-}
-body.tilt-on .board {
-  transform: rotateX(33deg) scale(0.96);
-  transform-origin: center 55%;
-  box-shadow: 0 26px 36px rgb(0 0 0 / 0.45);
-}
-/* 揺れ演出もチルトしたまま（通常の shake キーフレームは transform を上書きしてしまうため） */
-body.tilt-on .board.shake {
-  animation-name: board-shake-tilt;
-}
-@keyframes board-shake-tilt {
-  0%,
-  100% {
-    transform: rotateX(33deg) scale(0.96);
-  }
-  15% {
-    transform: rotateX(33deg) scale(0.96) translate(-5px, 2px) rotate(-0.3deg);
-  }
-  35% {
-    transform: rotateX(33deg) scale(0.96) translate(5px, -2px) rotate(0.3deg);
-  }
-  55% {
-    transform: rotateX(33deg) scale(0.96) translate(-4px, -1px);
-  }
-  75% {
-    transform: rotateX(33deg) scale(0.96) translate(3px, 1px);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .board {
-    transition: none;
-  }
-}
-
-/* ---------- カメラ追尾モード（盤面を拡大し、手番のコマを中心に追いかける） ---------- */
-
-/* 盤面のビューポート：カメラで拡大・移動した盤面がここからはみ出さないようにする */
+/* 盤面のビューポート：3Dキャンバスを盤面と同じ大きさで重ねる土台 */
 .board-view {
+  position: relative;
   width: var(--board);
   height: var(--board);
   overflow: hidden;
   border-radius: 10px;
 }
-body.cam-on .board {
-  /* コマの移動（170ms刻み）に滑らかに追いつくよう、少し長めの遷移にする */
-  transition: transform 0.45s ease;
-  will-change: transform;
-}
-body.cam-drag .board {
-  /* ドラッグ中は遷移を切って、指・カーソルの動きに遅れずついてくるようにする */
-  transition: none;
-}
-body.cam-on .board-view {
-  touch-action: none;
-  cursor: grab;
-}
-body.cam-drag .board-view {
-  cursor: grabbing;
-}
-/* 揺れ演出のキーフレームは transform を上書きしてカメラ位置を壊すので、カメラ中は止める */
-body.cam-on .board.shake {
-  animation: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  body.cam-on .board {
-    transition: none;
-  }
-}
-
-/* ---------- 3D盤面モード（Three.js） ---------- */
-
-/* 3Dキャンバスの置き場所。2D盤面と同じ大きさで、盤面の下に敷く */
-.board-view {
-  position: relative;
-}
+/* 3Dキャンバスの置き場所。DOM盤面の下に敷く */
 .board-3d {
   position: absolute;
   inset: 0;
   z-index: 0;
   border-radius: 10px;
   overflow: hidden;
-}
-.board-3d[hidden] {
-  display: none;
 }
 .board-3d-canvas {
   display: block;
@@ -2567,22 +2452,38 @@ body.cam-on .board.shake {
 .board-3d-canvas:active {
   cursor: grabbing;
 }
-/* 3D表示中は2Dのマスだけを消す。手番表示は盤面に重ねず横の列の帯（.center-status）へ移し、
-   サイコロは3D側が盤面中央に出す。盤面全体はクリックを通すので、
+/* DOMの盤面は3Dへの同期元として裏に置く：マスは見せず、盤面全体はクリックを通すので、
    下のキャンバスがマスのタップとドラッグを受け取る。
-   操作パネル類も横の列に出る（カメラモードと同じ扱い） */
-body.view-3d .board {
+   手番表示は盤面に重ねず横の列の帯（.center-status）へ移し、
+   サイコロは3D側が盤面中央に出す。操作パネル類も横の列に出る */
+.board {
   z-index: 1;
   background: transparent;
   box-shadow: none;
   pointer-events: none;
-  /* 2Dカメラやチルトの transform で中央表示がずれないようにする */
-  transform: none !important;
 }
-body.view-3d .tile {
+/* マス自体は見せないが、キーボード操作と支援技術から辿れるようにする。
+   visibility: hidden だとタイルがフォーカスも読み上げもできなくなるため使わず、
+   タイルの地（背景・影・枠）と中身だけを隠す。
+   フォーカスが当たったときだけ、輪郭とマス名を出して位置を知らせる */
+.board .tile {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.board .tile > * {
   visibility: hidden;
 }
-/* 3D表示のとき、ターン・手番・順番を盤面の外（横の列の先頭）に出す帯。
+.board .tile:focus-visible {
+  outline: 3px solid var(--brass);
+  outline-offset: -3px;
+  background: rgb(10 14 26 / 0.78);
+}
+.board .tile:focus-visible .name {
+  visibility: visible;
+  color: var(--on-table);
+}
+/* ターン・手番・順番を盤面の外（横の列の先頭）に出す帯。
    盤面の中央に重ねると3Dのマスやラベルと被るため、renderCenter が .dock の先頭へ移す。
    サイコロは帯にも中央にも出さず、3D側が盤面中央（リングの空きスペース）に出す */
 .center-status {

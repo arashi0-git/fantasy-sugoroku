@@ -112,6 +112,11 @@ const SCREEN_NAMES: Record<AppScreen, string> = {
 let screen: AppScreen = 'title';
 /** 対戦が存在するか（破棄したら false。履歴で「対戦」に戻っても復元はできない） */
 let hasGame = false;
+/**
+ * 保留中の対戦開始リクエストの世代。画面遷移のたびに進め、
+ * 先読み完了を待っている間に別の画面へ移ったら、古いリクエストを無効化する
+ */
+let startToken = 0;
 
 function pushScreen(target: AppScreen) {
   try {
@@ -129,6 +134,15 @@ function replaceScreen(target: AppScreen) {
   }
 }
 
+/** 現在のブラウザ履歴エントリが指している画面（履歴に積まれていない場合は null） */
+function currentHistoryScreen(): AppScreen | null {
+  try {
+    return (history.state as { fsScreen?: AppScreen } | null)?.fsScreen ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** タブバーの見た目を現在の画面に合わせる */
 function syncNavBar() {
   const over = screen === 'game' && hasGame && state.phase.kind === 'gameover';
@@ -140,8 +154,37 @@ function syncNavBar() {
 
 /** 実際の画面切り替え。push=true ならブラウザ履歴に積む */
 function goTo(target: AppScreen, push = true) {
+  // どの画面へ移っても、保留中の開始リクエスト（先読み待ち）は無効になる
+  startToken += 1;
+  if (target === 'select') {
+    // 対戦開始の可否は、この共通パスで一元的に強制する（入口がタイトルボタンでも
+    // ブラウザ履歴でも、ここを通らない限りキャラ選択＝対戦開始には進めない）
+    if (view.boardFailed) {
+      // 3Dを表示できない環境では進ませない。履歴の指す先をタイトルに置き換え、
+      // タイトルに留まってエラーを出す
+      target = 'title';
+      push = false;
+      replaceScreen('title');
+    } else if (view.boardPending) {
+      // 先読みが終わるまで現在の画面に留まり、完了したら改めて選択画面へ進む。
+      // その間に別の画面へ移っていたら（startToken が進んでいたら）取りやめる
+      const token = startToken;
+      void view.waitBoardReady().then(() => {
+        if (token !== startToken) return;
+        // 履歴経由の保留（push=false）は、適用する時点で現在の履歴エントリが
+        // まだキャラ選択を指している場合にだけ進める。そのあと「進む」で
+        // タイトルへ戻っていたら、履歴と画面が食い違うので取りやめる
+        if (!push && currentHistoryScreen() !== 'select') return;
+        goTo('select', push);
+      });
+      return;
+    }
+  }
   screen = target;
   if (push) pushScreen(target);
+  // 3D盤面の描画ループは画面遷移に連動させる（対戦画面の間だけ回す）。
+  // 履歴で終了済みの対戦へ戻る場合も、ここを通ることで盤面が再び動き出す
+  view.setBoardWanted(target === 'game');
   const titleEl = document.getElementById('title')!;
   const selectEl = document.getElementById('select')!;
   if (target === 'title') {
@@ -198,6 +241,10 @@ async function requestNav(target: AppScreen, push = true, fromPop = false) {
 
 // ブラウザの戻る／進む：履歴に積んだ画面へ、履歴を増やさずに戻る
 window.addEventListener('popstate', (e) => {
+  // 履歴が動いた時点で、先読み完了待ちの開始リクエストは古くなる。
+  // 現在の画面と同じエントリへの移動（同画面 popstate）でも早期 return で
+  // 取りこぼさないよう、遷移先の判定より前に必ず無効化する
+  startToken += 1;
   const target = (e.state as { fsScreen?: AppScreen } | null)?.fsScreen;
   if (!target || target === screen) return;
   void requestNav(target, false, true);
@@ -250,6 +297,8 @@ function begin(mine: CharacterId) {
     profile,
     reward: null,
   };
+  // 対戦画面への入口は goTo を通らないので、描画ループの有効化もここで行う
+  view.setBoardWanted(true);
   view.render(state, extras);
   syncNavBar();
   void runCpu();
@@ -315,9 +364,9 @@ async function act(action: Action) {
     extras.rolling = false;
     extras.dice = next.rolled;
     view.render(state, extras);
-    // 3Dではサイコロが止まる演出がまだ続いているので、終わってからコマを動かす
+    // サイコロが止まる演出がまだ続いているので、終わってからコマを動かす
     // （出目が確定しないうちにピンが歩き出すと、出目が読み取りにくいため）。
-    // 2Dでは待つものはない。スキップ時は待ちを最小化するため待たない
+    // スキップ時は待ちを最小化するため待たない
     if (speedMode !== 'skip') await view.diceSettled();
   }
 
@@ -370,7 +419,18 @@ function settleReward() {
 
 /** タイトル画面（コイン・称号・装備テーマを反映。ガチャ・コレクションへの導線は下部タブバー） */
 function showTitleScreen() {
-  view.showTitle(document.getElementById('title')!, () => goTo('select'), profile);
+  view.showTitle(document.getElementById('title')!, () => void startFlow(), profile, view.boardFailed);
+}
+
+/**
+ * 「ゲームをはじめる」の先。対戦開始の可否（3D盤面の先読みの成否）は、
+ * 共通の遷移パスである goTo('select') が一元的に強制する：
+ * 先読み中は完了まで遷移を保留し、失敗していたら対戦を始めずタイトルに留まって
+ * エラーを出す（2Dへの代替表示はしない。通常のゲームと同様、表示できない環境では始めない）。
+ * 入口ごとの個別チェックに頼らず、ここでは共通パスへ委ねるだけにする
+ */
+function startFlow() {
+  goTo('select');
 }
 
 function openGacha() {
@@ -400,6 +460,10 @@ function openCollection() {
 /** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
 function boot() {
   replaceScreen('title');
+  // 3D盤面の先読みの成否が確定したら、失敗の場合だけタイトルにエラーを出す
+  view.setBoardStatusHandler((ok) => {
+    if (!ok && screen === 'title') showTitleScreen();
+  });
   showTitleScreen();
   syncNavBar();
 }
