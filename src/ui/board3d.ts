@@ -23,17 +23,14 @@ const TILE_H = 0.16;
 const CAM_DIST = 12.3;
 /**
  * 横方向に最低限収めたい半幅（狭い画面でカメラを引くときの目安、実測ベース）。
- * 内訳：端マス中心 4.48 ＋ ラベル半幅 0.67 ＋ 追従のずれ（FIT_FOLLOW_PULL 分で最大 0.81）
- * ＋ 手前側のマスが透視で大きく写る分の余裕（約1.7）。
- * 追従位置を四隅・四辺に置いて全数実測し、全位置でラベルが切れないことを確かめた値
+ * 内訳：端マス中心 4.48 ＋ ラベル半幅 0.67 ＋ 手前側のマスが透視で大きく写る分の余裕。
+ * カメラ追従があった頃に四隅・四辺で全数実測して決めた値で、追従をやめた今は
+ * その分だけ余裕が増えている（安全側）。カメラは盤面中央を見て固定し、
+ * 視点は初期フィットと手動ドラッグだけで決まる
  */
 const FIT_HALF_W = 7.7;
-/** 盤面全体を収めるためにカメラを引いた画面での追従の引き寄せ量（通常は FOLLOW_PULL） */
-const FIT_FOLLOW_PULL = 0.18;
 /** カメラの基本の見下ろし角（真上から測った角度）。浅すぎず深すぎない斜め見下ろし */
 const CAM_POLAR = 0.94;
-/** 手番のコマへの追従の強さ（基本値）。コマを画面中央に固定せず、盤面の文脈が残るよう中心へ少し引き戻す */
-const FOLLOW_PULL = 0.5;
 
 /** 9×9 グリッドの行・列 → 3D座標。2D盤面と同じく、行9が手前（南）、列9が右（東） */
 function cellToXZ(row: number, col: number): { x: number; z: number } {
@@ -450,14 +447,8 @@ export class Board3D {
   private diceAnim: ({ from: THREE.Quaternion; final: THREE.Quaternion; axis: THREE.Vector3; turns: number; t0: number } | null)[] = [null, null];
   /** サイコロの演出が終わるのを待っている側（main がコマ移動の開始を遅らせるために使う） */
   private diceSettleWaiters: (() => void)[] = [];
-  private follow = new THREE.Vector3();
   /** カメラの距離（狭い画面では resize で引き延ばす。通常は CAM_DIST） */
   private dist = CAM_DIST;
-  /** 追従の引き寄せ量。盤面全体を収めるためにカメラを引いた画面では、視点のずれで
-      反対側の端が切れないよう、収まる範囲に合わせて resize で弱める */
-  private followPull = FOLLOW_PULL;
-  private followInit = false;
-  private lastFollowSquare = -1;
   /** ドラッグによる視点のずれ（目標値と現在値） */
   private az = 0;
   private azT = 0;
@@ -705,20 +696,16 @@ export class Board3D {
       token.target.set(base.x + ox, TILE_H + 0.05, base.z + oz);
     }
 
-    // 追従先は手番の人のコマ。コマが別のマスへ移ったら、ドラッグのずれは捨てて追尾へ戻る
+    // 目印（手番コマの上の三角）の行き先だけを手番に合わせる。
+    // カメラはコマや手番に連動して動かさない（視点は初期フィットと手動ドラッグのみ）。
+    // 以前はコマが移るたびにドラッグのずれを捨てて追従していたが、
+    // ユーザーが動かした視点が勝手に戻ってしまうため全廃した
     const cur = s.players[s.current];
     const followSq = cur && !cur.bankrupt ? (shownPositions[s.current] ?? cur.position) : -1;
     if (followSq >= 0) {
       const t = this.tileXZ(followSq);
-      this.follow.set(t.x, 0, t.z);
-      this.markerTarget.copy(this.follow);
+      this.markerTarget.set(t.x, 0, t.z);
       this.markerVisible = true;
-      if (!this.followInit) this.followInit = true;
-      if (followSq !== this.lastFollowSquare) {
-        this.lastFollowSquare = followSq;
-        this.azT = 0;
-        this.polarT = CAM_POLAR;
-      }
     } else {
       this.markerVisible = false;
     }
@@ -854,11 +841,12 @@ export class Board3D {
       if (t.selectRing.visible) (t.selectRing.material as THREE.MeshBasicMaterial).opacity = pulse;
     }
 
-    // カメラ：ドラッグのずれを滑らかに反映しつつ、手番コマ（盤面中心へ少し引き戻した点）を見る
+    // カメラ：見る点は盤面中央で固定し、ドラッグのずれだけを滑らかに反映する。
+    // コマの移動や手番交代では視点を動かさない
     const kCam = 1 - Math.exp(-dt * 5);
     this.az += (this.azT - this.az) * kCam;
     this.polar += (this.polarT - this.polar) * kCam;
-    const look = new THREE.Vector3(this.follow.x * this.followPull, 0.15, this.follow.z * this.followPull);
+    const look = new THREE.Vector3(0, 0.15, 0);
     const sp = Math.sin(this.polar);
     const off = new THREE.Vector3(
       this.dist * sp * Math.sin(this.az),
@@ -877,20 +865,22 @@ export class Board3D {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     // 基本距離のままだと、画面の横幅に対して盤面のリングと端のマスのラベルが
-    // 切れてしまうことがある（縦画面では幅が狭いため、横画面でも追従の寄りで
-    // 端がはみ出す）。縦・横を問わず、横方向に FIT_HALF_W が収まる距離まで
-    // 足りない分だけカメラを引き、引いた画面では追従の引き寄せも弱める
+    // 切れてしまうことがある（縦画面では幅が狭い）。縦・横を問わず、横方向に
+    // FIT_HALF_W が収まる距離まで足りない分だけカメラを引く（初期表示と
+    // リサイズ／回転時のフィット。対戦中の視点はここでは動かさない）
     this.dist = CAM_DIST;
-    this.followPull = FOLLOW_PULL;
     const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     const needDist = FIT_HALF_W / (tanHalf * this.camera.aspect);
     if (needDist > CAM_DIST) {
       this.dist = Math.min(needDist, CAM_DIST * 1.62);
-      // 追従で視点が寄ると反対側の端が余分に外へ出るので、全体が収まる画面では
-      // 引き寄せを弱め、手番コマへの寄りは緩やかにする（FIT_HALF_W はこの前提の値）
-      this.followPull = FIT_FOLLOW_PULL;
     }
     this.camera.updateProjectionMatrix();
+  }
+
+  /** 検証用：現在のカメラ位置を返す（視点が自動で動いていないことの確認に使う） */
+  debugCamera(): { x: number; y: number; z: number } {
+    const p = this.camera.position;
+    return { x: p.x, y: p.y, z: p.z };
   }
 
   /**

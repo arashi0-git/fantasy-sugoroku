@@ -284,6 +284,12 @@ export class View {
     const boardView = el('div', 'board-view');
     this.boardEl.parentElement?.insertBefore(boardView, this.boardEl);
     boardView.append(this.boardEl);
+    // ターン・手番・順番の帯は盤面の上に出す（盤面の下は操作とイベントに空ける）。
+    // .app のグリッドでは盤面の真上のセルに置かれる（style.css の .status-strip）
+    const statusStrip = el('div', 'status-strip');
+    statusStrip.setAttribute('aria-label', 'ターンと順番');
+    this.statusEl = statusStrip;
+    boardView.parentElement?.insertBefore(statusStrip, boardView);
     // 3D盤面の置き場所（盤面の下に敷く。DOMのマスは同期元として裏に残し、見せない）
     const holder3d = el('div', 'board-3d');
     boardView.append(holder3d);
@@ -325,8 +331,8 @@ export class View {
     }
     this.buildSheet();
     this.buildSettings();
-    this.buildRotateHint();
     this.buildTabBar();
+    this.initInputModality();
     this.buildConfirmDialog();
     requestAnimationFrame(this.tickGauge);
   }
@@ -469,6 +475,8 @@ export class View {
   // ---- 3D盤面（Three.js） ----
   /** 3D盤面の置き場所（コンストラクタで .board-view の中に作る） */
   private board3dHolder!: HTMLElement;
+  /** ターン・手番・順番の帯の置き場所（盤面の上。コンストラクタで .app へ差し込む） */
+  private statusEl!: HTMLElement;
   /** 3D盤面の本体。コンストラクタで先読みして用意する */
   private board3d: Board3D | null = null;
   /** 先読みの結果（成功なら true）。コンストラクタで開始し、タイトル表示中に確定する */
@@ -566,27 +574,24 @@ export class View {
     if (this.board3d) await this.board3d.whenDiceSettled();
   }
 
-  /** 縦向きのスマホで対戦画面を開いている間だけ出す「横画面が見やすいよ」の小さな案内 */
-  private buildRotateHint() {
-    try {
-      if (window.sessionStorage.getItem('fs-rotate-hint') === 'off') document.body.classList.add('hint-off');
-    } catch {
-      /* 判定できない環境ではそのまま出す */
-    }
-    const hint = el('div', 'rotate-hint');
-    const close = el('button', 'rotate-hint-close', '✕');
-    close.type = 'button';
-    close.setAttribute('aria-label', '案内を閉じる');
-    close.addEventListener('click', () => {
-      document.body.classList.add('hint-off');
-      try {
-        window.sessionStorage.setItem('fs-rotate-hint', 'off');
-      } catch {
-        /* 保存できなくても、この画面では閉じられる */
-      }
+  /**
+   * 入力モダリティの判定（キーボード操作中かどうか）。
+   * タイルのフォーカス輪郭（.tile:focus-visible）はキーボードで移動しているときだけ出す。
+   * タッチ／マウスでは盤面は3D側で操作するため、DOMタイルにフォーカスが残ると
+   * 輪郭だけが盤面の外に浮いて見えてしまう（style.css の body.kbd-nav ゲートと対）。
+   * Tab を押したらキーボードモード、ポインターを使ったらポインターモードに戻す
+   */
+  private initInputModality() {
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') document.body.classList.add('kbd-nav');
     });
-    hint.append(el('span', 'rotate-hint-text', '📱 横画面が見やすいよ'), close);
-    document.body.append(hint);
+    window.addEventListener(
+      'pointerdown',
+      () => {
+        document.body.classList.remove('kbd-nav');
+      },
+      { capture: true },
+    );
   }
 
   // ---- 下部タブバー（全画面共通の導線） ----
@@ -938,6 +943,12 @@ export class View {
           }),
       );
     });
+
+    // フォーカスの取り残し防止：選択フェーズの対象から外れて tabindex を失ったタイルに
+    // フォーカスが残っていると、その輪郭だけが盤面の外に浮いて見えることがある。
+    // フォーカス可能なタイル（対象のマス／詳細ボタン）の間は残し、それ以外は外す
+    const ae = document.activeElement;
+    if (ae instanceof HTMLElement && ae.classList.contains('tile') && !ae.hasAttribute('tabindex')) ae.blur();
   }
 
   private tileTitle(s: GameState, sq: Square): string {
@@ -1113,15 +1124,16 @@ export class View {
   private renderCenter(s: GameState, x: ViewExtras, myTurn: boolean) {
     this.centerEl.replaceChildren();
     this.dockEl.replaceChildren();
-    // 盤面の中央は3Dそのものが占め、空き地のような余白がない。
-    // お知らせと操作パネルはすべて横の列（スマホでは盤面の下）に出し、
-    // ターン・手番・順番はその先頭に帯として出して、3Dのマスやラベルと重ならないようにする。
+    this.statusEl.replaceChildren();
+    // ターン・手番・順番は盤面の上の帯（.status-strip）へ小さく出す。
+    // 盤面の下（ドック）は上から 操作パネル（ゲージ→ボタン）→ イベント表示 の順にし、
+    // 縦画面でもスクロールせずにダイスボタンへ届くようにする。
     // サイコロは3D側が盤面中央（リングの空きスペース）に出すので、DOMでは出さない
-    const host = this.dockEl;
     const status = el('div', 'center-status');
-    host.append(status);
+    this.statusEl.append(status);
     status.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
+    const host = this.dockEl;
     if (s.phase.kind === 'gameover') {
       host.append(this.resultPanel(s, x));
       return;
@@ -1140,8 +1152,18 @@ export class View {
     status.append(whose);
     status.append(this.orderBar(s, x));
 
+    // 操作パネルを先に出す（サイコロの番なら ゲージ→ボタン が盤面のすぐ下に来る）
+    const panel = this.pendingFly
+      ? this.flyPanel()
+      : this.tradeDraft
+        ? this.tradePanel(s)
+        : this.pendingCard
+          ? this.cardTargetPanel(s, this.pendingCard)
+          : this.phasePanel(s, myTurn);
+    if (panel) host.append(panel);
+
     // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）。
-    // 盤面の中央は3Dが占めるので、出来事の帯も横の列に出す
+    // イベント表示はボタンの下に置く
     const banner = this.eventBanner(s, x);
     if (banner) host.append(banner);
 
@@ -1173,15 +1195,6 @@ export class View {
       if (s.lastPayment && ph !== 'buyout') host.append(this.paymentNotice(s));
       if (ph === 'roll' && s.doublesInRow > 0) host.append(el('p', 'notice', 'ゾロ目！ もう一度振れます'));
     }
-
-    const panel = this.pendingFly
-      ? this.flyPanel()
-      : this.tradeDraft
-        ? this.tradePanel(s)
-        : this.pendingCard
-          ? this.cardTargetPanel(s, this.pendingCard)
-          : this.phasePanel(s, myTurn);
-    if (panel) host.append(panel);
   }
 
   /** このターンの順番（今動いている人を強調、終わった人は薄く） */
