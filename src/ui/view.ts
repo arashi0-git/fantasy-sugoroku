@@ -8,6 +8,7 @@ import { MISSIONS } from '../data/missions';
 import { GameReward, levelOf, ownsChar, Profile, unownedChars, xpProgress } from '../meta/profile';
 import { COSMETIC_KIND_NAMES, COSMETIC_LIST, CosmeticKind, cosmeticById } from '../meta/cosmetics';
 import { GachaResult, isRareResult, PITY_LIMIT } from '../meta/gacha';
+import type { AuthActionResult, AuthState } from '../meta/auth';
 import { grownStats } from '../meta/growth';
 import type { Board3D } from './board3d';
 import {
@@ -135,6 +136,20 @@ export interface SettingsHooks {
   inGame?(): boolean;
   /** 対戦を中断する（対戦破棄の確認ダイアログは main 側が担う） */
   quitGame?(): void;
+}
+
+/**
+ * ログイン（アカウント）まわりの受け口。状態の実体は main 側の AuthService が持ち、
+ * タイトル画面のログイン表示とログインダイアログはこの受け口越しに読み書きする。
+ * フェーズ2ではログイン基盤までで、対戦開始のゲートとプロフィール同期はまだ行わない。
+ */
+export interface AuthHooks {
+  getState(): AuthState;
+  /** 状態が変わったら呼ばれる。戻り値は購読解除関数 */
+  subscribe(listener: (state: AuthState) => void): () => void;
+  signInWithEmail(email: string): Promise<AuthActionResult>;
+  signInWithGoogle(): Promise<AuthActionResult>;
+  signOut(): Promise<void>;
 }
 
 export interface ViewExtras {
@@ -340,6 +355,7 @@ export class View {
     this.buildTabBar();
     this.initInputModality();
     this.buildConfirmDialog();
+    this.buildAuthDialog();
     requestAnimationFrame(this.tickGauge);
   }
 
@@ -699,6 +715,173 @@ export class View {
     return new Promise((resolve) => {
       this.confirmResolve = resolve;
     });
+  }
+
+  // ---- ログイン（アカウント） ----
+  private authEl!: HTMLElement;
+  private authBody!: HTMLElement;
+  private authHooks: AuthHooks | null = null;
+  /** タイトル画面内のアカウント表示エリア（showTitle のたびに作り直す） */
+  private accountArea: HTMLElement | null = null;
+  /** ダイアログ内のお知らせ（送信完了・エラー）。再描画をまたいで保持する */
+  private authNotice: { kind: 'info' | 'error'; text: string } | null = null;
+  /** 入力途中のメールアドレス（ダイアログの再描画で消えないよう保持する） */
+  private authEmailDraft = '';
+
+  /** ログインまわりの受け口を登録する（状態が変わるたびに表示を合わせる） */
+  setAuthHooks(h: AuthHooks) {
+    this.authHooks = h;
+    h.subscribe(() => {
+      this.renderAccountArea();
+      if (!this.authEl.hidden) this.syncAuthDialog();
+    });
+    this.renderAccountArea();
+  }
+
+  /** タイトル画面のアカウント表示（未ログインならログイン導線、ログイン中ならアドレスとログアウト） */
+  private renderAccountArea() {
+    const area = this.accountArea;
+    if (!area) return;
+    area.replaceChildren();
+    const hooks = this.authHooks;
+    if (!hooks) return;
+    const state = hooks.getState();
+    if (state.status === 'signedIn') {
+      area.append(el('span', 'title-account-mail', `👤 ${state.user?.email ?? 'ログイン中'}`));
+      const logout = el('button', 'title-account-btn', 'ログアウト');
+      logout.type = 'button';
+      logout.addEventListener('click', () => {
+        void hooks.signOut();
+      });
+      area.append(logout);
+    } else if (state.status === 'signedOut') {
+      const login = el('button', 'title-account-btn', 'ログイン');
+      login.type = 'button';
+      login.addEventListener('click', () => this.openAuthDialog());
+      area.append(login);
+    } else {
+      area.append(el('span', 'title-account-note', 'ログイン状態を確認中…'));
+    }
+  }
+
+  /** ログインダイアログの土台を1回だけ作る（設定パネルと同じオーバーレイ方式） */
+  private buildAuthDialog() {
+    const overlay = el('div', 'auth-overlay');
+    overlay.hidden = true;
+    const box = el('section', 'auth-box');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'ログイン');
+    const head = el('div', 'auth-head');
+    head.append(el('h3', 'auth-title', 'ログイン'));
+    const close = el('button', 'auth-close', '✕');
+    close.type = 'button';
+    close.setAttribute('aria-label', 'ログイン画面を閉じる');
+    close.addEventListener('click', () => this.closeAuthDialog());
+    head.append(close);
+    this.authBody = el('div', 'auth-body');
+    box.append(head, this.authBody);
+    overlay.append(box);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this.closeAuthDialog();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !overlay.hidden) this.closeAuthDialog();
+    });
+    document.body.append(overlay);
+    this.authEl = overlay;
+  }
+
+  private openAuthDialog() {
+    this.authNotice = null;
+    this.syncAuthDialog();
+    this.authEl.hidden = false;
+    this.authBody.querySelector<HTMLElement>('input, button')?.focus();
+  }
+
+  private closeAuthDialog() {
+    this.authEl.hidden = true;
+  }
+
+  /** ダイアログの中身を現在のログイン状態に合わせて作り直す */
+  private syncAuthDialog() {
+    const body = this.authBody;
+    body.replaceChildren();
+    const hooks = this.authHooks;
+    if (!hooks) {
+      body.append(el('p', 'auth-note', 'ログイン機能を準備中です。'));
+      return;
+    }
+    if (this.authNotice) {
+      const notice = el('p', `auth-msg ${this.authNotice.kind}`, this.authNotice.text);
+      if (this.authNotice.kind === 'error') notice.setAttribute('role', 'alert');
+      body.append(notice);
+    }
+    const state = hooks.getState();
+    if (state.status === 'signedIn') {
+      body.append(el('p', 'auth-signed-mail', `👤 ${state.user?.email ?? 'ログイン中'}`));
+      body.append(el('p', 'auth-note', 'このアカウントでログインしています。'));
+      const logout = el('button', 'btn auth-wide', 'ログアウト');
+      logout.type = 'button';
+      logout.addEventListener('click', () => {
+        this.authNotice = null;
+        void hooks.signOut();
+      });
+      body.append(logout);
+      return;
+    }
+    // 未ログイン（確認中も含む）：メールリンクとGoogleの2導線
+    const label = el('label', 'auth-label', 'メールアドレス');
+    const input = document.createElement('input');
+    input.className = 'auth-input';
+    input.type = 'email';
+    input.autocomplete = 'email';
+    input.placeholder = 'you@example.com';
+    input.value = this.authEmailDraft;
+    input.addEventListener('input', () => {
+      this.authEmailDraft = input.value;
+    });
+    label.append(input);
+    body.append(label);
+
+    const send = el('button', 'btn auth-wide', 'ログインリンクを送る');
+    send.type = 'button';
+    const google = el('button', 'btn quiet auth-wide', 'Googleでログイン');
+    google.type = 'button';
+    const setBusy = (busy: boolean, text?: string) => {
+      send.disabled = busy;
+      google.disabled = busy;
+      if (text) send.textContent = text;
+    };
+    send.addEventListener('click', () => {
+      setBusy(true, '送信中…');
+      void hooks.signInWithEmail(input.value).then((result) => {
+        this.authNotice = result.ok
+          ? { kind: 'info', text: 'メールを送信しました。メールの中のリンクを開くとログインできます。' }
+          : { kind: 'error', text: result.message };
+        this.syncAuthDialog();
+      });
+    });
+    body.append(send);
+    body.append(el('p', 'auth-divider', 'または'));
+    google.addEventListener('click', () => {
+      setBusy(true);
+      void hooks.signInWithGoogle().then((result) => {
+        // 成功時はブラウザがGoogleへ遷移するので、ここへ戻るのは失敗時だけ
+        if (!result.ok) {
+          this.authNotice = { kind: 'error', text: result.message };
+          this.syncAuthDialog();
+        }
+      });
+    });
+    body.append(google);
+    body.append(
+      el(
+        'p',
+        'auth-note',
+        'パスワードは不要です。入力したアドレスにログイン用のリンクを送ります。初めての方もそのままログインできます（アカウントが自動で作られます）。',
+      ),
+    );
   }
 
   /** 3D盤面など、DOMのマスの外からマスが選ばれたときの入口（扱いはタイルのタップと同じ） */
@@ -2433,6 +2616,12 @@ export class View {
     }
     startBtn.addEventListener('click', () => onStart());
     wrap.append(startBtn);
+    // アカウント表示（ログイン導線／ログイン中のアドレスとログアウト）。
+    // フェーズ2では導線だけを置き、未ログインでも従来どおり遊べる（ゲートはフェーズ3）
+    const account = el('div', 'title-account');
+    this.accountArea = account;
+    wrap.append(account);
+    this.renderAccountArea();
     // ガチャ・コレクションへの導線は下部タブバーに一本化した（タイトル内のボタンは置かない）
     const howBtn = el('button', 'title-how', 'あそびかた');
     const how = el('div', 'title-rules');

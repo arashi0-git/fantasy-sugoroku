@@ -2730,6 +2730,166 @@ body.in-game {
   padding-bottom: calc(32px + var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
 }
 
+/* ---------- ログイン（タイトル画面のアカウント表示とダイアログ） ---------- */
+
+.title-account {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 32px;
+  margin-top: 2px;
+}
+.title-account-mail {
+  color: var(--on-table);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  overflow-wrap: anywhere;
+}
+.title-account-note {
+  color: var(--on-table-soft);
+  font-size: 13px;
+}
+.title-account-btn {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--on-table);
+  background: transparent;
+  border: 1px solid var(--on-table-soft);
+  border-radius: 999px;
+  padding: 6px 18px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.title-account-btn:hover {
+  border-color: var(--on-table);
+}
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  background: rgb(10 14 30 / 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.auth-overlay[hidden] {
+  display: none;
+}
+.auth-box {
+  background: var(--table-deep);
+  color: var(--on-table);
+  width: min(100%, 400px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  border-radius: 14px;
+  border: 1px solid rgb(199 154 59 / 0.4);
+  padding: 16px 20px 20px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
+}
+.auth-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.auth-title {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+.auth-close {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--on-table-soft);
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.auth-close:hover {
+  color: var(--on-table);
+}
+.auth-body {
+  display: grid;
+  gap: 10px;
+}
+.auth-msg {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.auth-msg.info {
+  border: 1px solid rgb(47 158 87 / 0.7);
+  background: rgb(47 158 87 / 0.16);
+  color: #b7e4c7;
+}
+.auth-msg.error {
+  border: 1px solid #d8453a;
+  background: rgb(216 69 58 / 0.14);
+  color: #ffb3ab;
+}
+.auth-label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  text-align: left;
+}
+.auth-input {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--stone);
+  border: 1px solid rgb(199 154 59 / 0.45);
+  border-radius: 10px;
+  padding: 10px 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.auth-input:focus-visible {
+  outline: 3px solid var(--brass);
+  outline-offset: 1px;
+}
+.auth-wide {
+  width: 100%;
+}
+.auth-divider {
+  margin: 0;
+  text-align: center;
+  color: var(--on-table-soft);
+  font-size: 12px;
+  letter-spacing: 0.2em;
+}
+.auth-note {
+  margin: 0;
+  color: var(--on-table-soft);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: left;
+}
+.auth-signed-mail {
+  margin: 0;
+  font-weight: 700;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+/* 横画面ではダイアログが画面からはみ出さないよう余白を詰める（設定パネルと同じ） */
+@media (orientation: landscape) and (max-height: 500px) {
+  .auth-overlay {
+    padding: 10px;
+  }
+  .auth-box {
+    max-height: calc(100dvh - 20px);
+    padding: 10px 16px 14px;
+  }
+}
+
 /* ---------- 確認ダイアログ ---------- */
 
 .confirm-overlay {

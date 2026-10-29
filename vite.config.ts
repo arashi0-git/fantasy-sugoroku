@@ -3,7 +3,9 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 
 /**
  * 公開用ビルド（GitHub Pages）にだけ、コンテンツセキュリティポリシーを入れる。
- * 読み込めるのは自分のサイトのスクリプト・スタイルと Google Fonts だけ。外への通信・フォーム送信・埋め込みは禁止。
+ * 読み込めるのは自分のサイトのスクリプト・スタイルと Google Fonts だけ。フォーム送信・埋め込みは禁止。
+ * 外への通信は、アカウント同期の接続先（Supabase）だけを許可リストで明示する。
+ * それ以外のオリジンへの接続は引き続き禁止（§8：リダイレクト・接続先は自サイト＋Supabaseに限定）。
  * （1ファイル版はスクリプトを HTML に埋め込むので、このポリシーは入れない）
  */
 const CSP = [
@@ -12,7 +14,8 @@ const CSP = [
   "style-src 'self' https://fonts.googleapis.com",
   'font-src https://fonts.gstatic.com',
   "img-src 'self' data:",
-  "connect-src 'none'",
+  // アカウント認証・同期のAPI接続先（Supabaseプロジェクト）だけを許可する
+  'connect-src https://azzyfumogyxkpzkmyzfo.supabase.co',
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'none'",
