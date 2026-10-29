@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { BOARD, GROUPS, Square } from '../data/board';
-import type { GameState } from '../core/game';
+import { landPrice, rentOf, type GameState } from '../core/game';
 
 /** view.ts から渡される同期情報（DOMタイルの選択可否・強調と同じ状態） */
 export interface Board3DHighlight {
@@ -24,10 +24,10 @@ const CAM_DIST = 12.3;
 /**
  * 横方向に最低限収めたい半幅（狭い画面でカメラを引くときの目安、実測ベース）。
  * 内訳：端マス中心 4.48 ＋ ラベル半幅 0.67 ＋ 追従のずれ（FIT_FOLLOW_PULL 分で最大 0.81）
- * ＋ 手前側のマスが透視で大きく写る分の余裕（約1.5）。
+ * ＋ 手前側のマスが透視で大きく写る分の余裕（約1.7）。
  * 追従位置を四隅・四辺に置いて全数実測し、全位置でラベルが切れないことを確かめた値
  */
-const FIT_HALF_W = 7.5;
+const FIT_HALF_W = 7.7;
 /** 盤面全体を収めるためにカメラを引いた画面での追従の引き寄せ量（通常は FOLLOW_PULL） */
 const FIT_FOLLOW_PULL = 0.18;
 /** カメラの基本の見下ろし角（真上から測った角度）。浅すぎず深すぎない斜め見下ろし */
@@ -228,40 +228,87 @@ function buildFestivalMark(): THREE.Group {
   return g;
 }
 
-/** マス名のラベル（常にカメラを向くスプライト）。フォント読込後に描き直せるよう、作り直し関数も返す */
-function makeLabel(text: string): { sprite: THREE.Sprite; redraw: () => void } {
+/** 金額の表記（DOMタイルや詳細シートと同じ「1,000G」形式） */
+const fmtG = (n: number) => `${n.toLocaleString('ja-JP')}G`;
+
+/** ラベルの下段に出す金額。所有地は所有者色の●＋通行料、更地は購入価格（●なし） */
+export interface LabelSub {
+  text: string;
+  color: string | null;
+}
+
+/**
+ * マスのラベル（常にカメラを向くスプライト）。2段構成で、上段が土地名、
+ * 下段が金額（所有地は所有者色の●＋通行料、更地は購入価格）。
+ * 建物のレベルは文字では出さず、建物の見た目で伝える方針（ユーザー決定）。
+ * 金額はゲームの進行で変わるため、setSub で差し替えられるようにする
+ */
+function makeLabel(name: string): { sprite: THREE.Sprite; setSub: (sub: LabelSub) => void; redraw: () => void } {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
-  canvas.height = 64;
+  canvas.height = 112;
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
+  let sub: LabelSub = { text: '', color: null };
+  const FONT = '"Zen Kaku Gothic New", "Hiragino Sans", sans-serif';
   const redraw = () => {
     const g = canvas.getContext('2d');
     if (!g) return;
     g.clearRect(0, 0, canvas.width, canvas.height);
-    let size = 31;
-    g.font = `700 ${size}px "Zen Kaku Gothic New", "Hiragino Sans", sans-serif`;
-    while (g.measureText(text).width > 196 && size > 17) {
+    // 土地名（1段目）。長い名前は収まるまで少しずつ小さくする
+    let size = 30;
+    g.font = `700 ${size}px ${FONT}`;
+    while (g.measureText(name).width > 204 && size > 16) {
       size -= 2;
-      g.font = `700 ${size}px "Zen Kaku Gothic New", "Hiragino Sans", sans-serif`;
+      g.font = `700 ${size}px ${FONT}`;
     }
-    const w = Math.min(248, g.measureText(text).width + 30);
+    const nameW = g.measureText(name).width;
+    // 金額（2段目）。所有地は所有者色の●を金額の左に置く
+    g.font = `700 25px ${FONT}`;
+    const subW = g.measureText(sub.text).width;
+    const dotW = sub.color ? 26 : 0;
+    const w = Math.min(250, Math.max(nameW, subW + dotW) + 30);
     const x = (canvas.width - w) / 2;
     g.beginPath();
-    g.roundRect(x, 11, w, 42, 12);
+    g.roundRect(x, 8, w, 96, 14);
     g.fillStyle = 'rgba(14, 20, 38, 0.58)';
     g.fill();
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.fillStyle = '#ffffff';
-    g.fillText(text, canvas.width / 2, 33);
+    g.font = `700 ${size}px ${FONT}`;
+    g.fillText(name, canvas.width / 2, 37);
+    g.font = `700 25px ${FONT}`;
+    if (sub.color) {
+      const total = dotW + subW;
+      const startX = canvas.width / 2 - total / 2;
+      g.beginPath();
+      g.arc(startX + 9, 79, 9, 0, Math.PI * 2);
+      g.fillStyle = sub.color;
+      g.fill();
+      g.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      g.lineWidth = 2;
+      g.stroke();
+      g.fillStyle = '#ffffff';
+      g.textAlign = 'left';
+      g.fillText(sub.text, startX + dotW, 80);
+    } else {
+      g.fillText(sub.text, canvas.width / 2, 80);
+    }
     tex.needsUpdate = true;
   };
   redraw();
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sprite.scale.set(1.34, 0.335, 1);
-  return { sprite, redraw };
+  sprite.scale.set(1.34, 1.34 * (112 / 256), 1);
+  return {
+    sprite,
+    setSub: (s: LabelSub) => {
+      sub = s;
+      redraw();
+    },
+    redraw,
+  };
 }
 
 /** プレイヤーのコマ（土台＋カプセル型の体） */
@@ -372,7 +419,16 @@ interface TileParts {
   festivalMark: THREE.Group;
   building: THREE.Group | null;
   buildingKey: string;
+  /** 名前＋金額の2段ラベル（土地・観光地のみ）。金額の差し替え用 */
+  label: { setSub: (sub: LabelSub) => void; redraw: () => void } | null;
+  /** ラベル下段の現在の内容を表すキー（変わったときだけ描き直す） */
+  labelKey: string;
+  /** ラベル下段の現在の表示内容（検証用に保持） */
+  labelSub: LabelSub | null;
 }
+
+/** 端のマスのラベルを盤面の内側へ寄せる量。端のままでは横画面でラベルがキャンバス端で切れる */
+const LABEL_PULL = 0.65;
 
 export class Board3D {
   private renderer: THREE.WebGLRenderer;
@@ -495,16 +551,34 @@ export class Board3D {
       festivalMark.visible = false;
       group.add(festivalMark);
 
-      // 土地と観光地には名前ラベル（常にカメラ向きで読める）
+      // 土地と観光地には名前＋金額のラベル（常にカメラ向きで読める）。
+      // 盤面の端のマスはラベルを内側（盤面中央方向）へ寄せ、横画面で
+      // キャンバス端で切れないようにする
+      let label: TileParts['label'] = null;
       if (sq.kind === 'land' || sq.kind === 'tourist') {
-        const { sprite, redraw } = makeLabel(sq.name);
-        sprite.position.set(0, 1.48, 0);
-        group.add(sprite);
-        this.labelRedraws.push(redraw);
+        const made = makeLabel(sq.name);
+        const pullX = cells[i].col <= 1 ? LABEL_PULL : cells[i].col >= 9 ? -LABEL_PULL : 0;
+        const pullZ = cells[i].row <= 1 ? LABEL_PULL : cells[i].row >= 9 ? -LABEL_PULL : 0;
+        made.sprite.position.set(pullX, 1.52, pullZ);
+        group.add(made.sprite);
+        this.labelRedraws.push(made.redraw);
+        label = made;
       }
 
       this.scene.add(group);
-      this.tiles.push({ group, top, frame, selectRing, highlightRing, festivalMark, building: null, buildingKey: '' });
+      this.tiles.push({
+        group,
+        top,
+        frame,
+        selectRing,
+        highlightRing,
+        festivalMark,
+        building: null,
+        buildingKey: '',
+        label,
+        labelKey: '',
+        labelSub: null,
+      });
     });
 
     // 手番の人のコマの上に浮かぶ目印
@@ -593,6 +667,19 @@ export class Board3D {
       parts.festivalMark.visible = s.festivals.includes(i);
       parts.selectRing.visible = hl.selectable.has(i);
       parts.highlightRing.visible = hl.highlight === i;
+      // ラベル下段の金額：所有地は所有者色の●＋通行料、更地は購入価格。
+      // DOMタイルの金額表示（renderTiles）と同じ値を使う
+      if (parts.label) {
+        const sub: LabelSub = prop
+          ? { text: fmtG(rentOf(s, i)), color: s.players[prop.owner].color }
+          : { text: fmtG(landPrice(i)), color: null };
+        const key = prop ? `o${prop.owner}:${sub.text}` : `v${sub.text}`;
+        if (key !== parts.labelKey) {
+          parts.labelKey = key;
+          parts.labelSub = sub;
+          parts.label.setSub(sub);
+        }
+      }
     });
 
     // コマの行き先（同じマスでは少しずらす）
@@ -789,15 +876,16 @@ export class Board3D {
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    // 狭い画面（スマホ縦など、正方形に近い小さな盤面）では基本距離のままだと
-    // 盤面のリングと端のマスのラベルが横方向に切れてしまうので、収まる分だけカメラを引く。
-    // 横画面・PC幅では従来の画角（CAM_DIST）のままにする
+    // 基本距離のままだと、画面の横幅に対して盤面のリングと端のマスのラベルが
+    // 切れてしまうことがある（縦画面では幅が狭いため、横画面でも追従の寄りで
+    // 端がはみ出す）。縦・横を問わず、横方向に FIT_HALF_W が収まる距離まで
+    // 足りない分だけカメラを引き、引いた画面では追従の引き寄せも弱める
     this.dist = CAM_DIST;
     this.followPull = FOLLOW_PULL;
-    if (w < 640 && this.camera.aspect < 1.25) {
-      const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-      const need = FIT_HALF_W / (tanHalf * this.camera.aspect * CAM_DIST);
-      this.dist = CAM_DIST * Math.min(Math.max(need, 1), 1.62);
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const needDist = FIT_HALF_W / (tanHalf * this.camera.aspect);
+    if (needDist > CAM_DIST) {
+      this.dist = Math.min(needDist, CAM_DIST * 1.62);
       // 追従で視点が寄ると反対側の端が余分に外へ出るので、全体が収まる画面では
       // 引き寄せを弱め、手番コマへの寄りは緩やかにする（FIT_HALF_W はこの前提の値）
       this.followPull = FIT_FOLLOW_PULL;
@@ -838,6 +926,11 @@ export class Board3D {
       if (overY > 4) yBad.push(i);
     });
     return { x: xBad, y: yBad, maxX, maxY };
+  }
+
+  /** 検証用：各マスのラベル下段に出ている金額と所有者色（ラベルがないマスは null） */
+  debugLabels(): (LabelSub | null)[] {
+    return this.tiles.map((t) => t.labelSub);
   }
 
   /** マス中心の画面座標（検証用）。盤面の外なら null */

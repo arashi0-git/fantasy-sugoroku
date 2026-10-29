@@ -1702,6 +1702,16 @@ button.hand-card:hover:not(:disabled) {
   justify-content: flex-end;
   margin-top: 14px;
 }
+/* 対戦を中断するボタン（対戦中のみ表示。行ごと隠す） */
+.settings-quit-row[hidden] {
+  display: none;
+}
+.settings-quit {
+  width: 100%;
+  background: var(--danger);
+  color: #fff;
+  box-shadow: 0 3px 0 #8e2f29;
+}
 
 /* 横画面ではパネルが画面からはみ出さないよう余白を詰める */
 @media (orientation: landscape) and (max-height: 500px) {
@@ -2607,6 +2617,14 @@ body {
   padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
 }
 
+/* 対戦中はタブバーを隠すので、下の余白は安全領域分だけでよい */
+body.in-game {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tabbar[hidden] {
+  display: none;
+}
+
 .tabbar {
   position: fixed;
   left: 0;
@@ -2709,6 +2727,10 @@ body {
   .dock {
     bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
   }
+  /* 対戦中はタブバーが無いので、ドックは画面の下端に貼り付ける */
+  body.in-game .dock {
+    bottom: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 /* 横画面ではタブバーを細くし、盤面の高さから差し引いて重ならないようにする */
@@ -2721,6 +2743,10 @@ body {
   }
   .app {
     height: calc(100dvh - var(--tabbar-h) - env(safe-area-inset-bottom, 0px));
+  }
+  /* 対戦中はタブバーが無いぶん、盤面の高さを画面いっぱいに広げる */
+  body.in-game .app {
+    height: calc(100dvh - env(safe-area-inset-bottom, 0px));
   }
   .tab-btn {
     flex-direction: row;

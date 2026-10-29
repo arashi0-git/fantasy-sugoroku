@@ -96,7 +96,23 @@ view.setSettingsHooks({
   },
   getSound: () => soundEnabled(),
   setSound: (on) => setSoundEnabled(on),
+  inGame: () => screen === 'game' && hasGame && state.phase.kind !== 'gameover',
+  quitGame: () => {
+    void quitToTitle();
+  },
 });
+
+/**
+ * 設定パネルの「ゲームを中断する」から対戦をやめてタイトルへ戻る。
+ * タブバーのホームボタンと同じ対戦破棄の確認を経てから破棄する
+ */
+async function quitToTitle() {
+  if (screen !== 'game' || !hasGame || state.phase.kind === 'gameover') return;
+  const ok = await view.confirmDialog('対戦の途中です。対戦をやめて、ホームへ移動しますか？', '対戦をやめて移動する');
+  if (!ok) return;
+  leaveGame();
+  goTo('title');
+}
 
 // ---- 画面遷移とブラウザ履歴の連携 ----
 // 画面は5つ：タイトル（ホーム）／キャラ選択／ガチャ／コレクション／対戦。
@@ -149,6 +165,9 @@ function syncNavBar() {
   view.setNavState({
     active: screen === 'title' ? 'home' : screen === 'gacha' ? 'gacha' : screen === 'collection' ? 'collection' : null,
     lockMeta: screen === 'game' && !over,
+    // 対戦の途中はタブバーを隠して盤面を広く使う。結果画面ではホームへ戻る
+    // 導線としてタブバーを出す（対戦をやめる導線は設定の中断ボタンが担う）
+    inGame: screen === 'game' && !over,
   });
 }
 

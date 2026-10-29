@@ -114,6 +114,8 @@ export interface NavBarState {
   active: NavTab | null;
   /** 対戦の途中かどうか。途中は対戦を抜けないと行けないガチャ・コレクションを無効化する */
   lockMeta: boolean;
+  /** 対戦の途中（対戦画面）かどうか。途中はタブバーを隠して盤面の表示領域を広げる */
+  inGame: boolean;
 }
 
 /** 対戦速度の選択肢（待ち時間の計算は main が担う。保存キーは fs-speed） */
@@ -129,6 +131,10 @@ export interface SettingsHooks {
   setSpeed(mode: SpeedMode): void;
   getSound(): boolean;
   setSound(on: boolean): void;
+  /** 対戦の途中かどうか（設定パネルの「ゲームを中断する」ボタンを出すかの判定） */
+  inGame?(): boolean;
+  /** 対戦を中断する（対戦破棄の確認ダイアログは main 側が担う） */
+  quitGame?(): void;
 }
 
 export interface ViewExtras {
@@ -403,6 +409,19 @@ export class View {
     soundRow.append(el('span', 'speed-label', '効果音'), soundBtn);
     box.append(soundRow);
 
+    // 対戦を中断する（対戦中のみ出す）。対戦中はタブバーが隠れているため、
+    // 対戦をやめてタイトルへ戻る導線はここに置く。確認ダイアログは main 側が担う
+    const quitBtn = el('button', 'btn settings-quit', 'ゲームを中断する');
+    quitBtn.type = 'button';
+    quitBtn.addEventListener('click', () => {
+      this.closeSettings();
+      this.settingsHooks?.quitGame?.();
+    });
+    const quitRow = el('div', 'settings-row settings-quit-row');
+    quitRow.append(quitBtn);
+    quitRow.hidden = true;
+    box.append(quitRow);
+
     const foot = el('div', 'settings-foot');
     const done = el('button', 'btn quiet', '閉じる');
     done.type = 'button';
@@ -430,6 +449,7 @@ export class View {
       const sound = this.settingsHooks?.getSound() ?? true;
       soundBtn.textContent = sound ? '🔊 オン' : '🔇 オフ';
       soundBtn.setAttribute('aria-pressed', String(sound));
+      quitRow.hidden = !(this.settingsHooks?.inGame?.() ?? false);
     };
     this.syncSettings = sync;
     sync();
@@ -572,10 +592,13 @@ export class View {
   // ---- 下部タブバー（全画面共通の導線） ----
   private navButtons = new Map<NavTab, HTMLButtonElement>();
   private navHandler: ((tab: NavTab) => void) | null = null;
+  private tabBarEl!: HTMLElement;
 
-  /** 画面下に常時出すタブバー。ホーム（タイトル）／ガチャ／コレクションへ直接行き来するための導線をここにまとめる */
+  /** 画面下に出すタブバー。ホーム（タイトル）／ガチャ／コレクションへ直接行き来するための導線をここにまとめる。
+      対戦中は隠して盤面の表示領域を広げる（対戦をやめる導線は設定パネルの中断ボタン） */
   private buildTabBar() {
     const bar = el('nav', 'tabbar');
+    this.tabBarEl = bar;
     bar.setAttribute('aria-label', 'メインメニュー');
     const tabs: { id: NavTab; icon: string; label: string }[] = [
       { id: 'home', icon: '🏠', label: 'ホーム' },
@@ -600,8 +623,11 @@ export class View {
     this.navHandler = h;
   }
 
-  /** タブバーの見た目を現在の画面に合わせる（アクティブ表示と、対戦中の無効化） */
+  /** タブバーの見た目を現在の画面に合わせる（アクティブ表示、対戦中の無効化、対戦中の非表示） */
   setNavState(s: NavBarState) {
+    // 対戦中はタブバーを隠し、body の余白とレイアウトも対戦用に切り替える（style.css の body.in-game）
+    this.tabBarEl.hidden = s.inGame;
+    document.body.classList.toggle('in-game', s.inGame);
     for (const [tab, b] of this.navButtons) {
       const active = s.active === tab;
       b.classList.toggle('active', active);
