@@ -289,6 +289,10 @@ export class View {
     // オーバーレイにして高さを消費させない（盤面の下は操作とイベントに空ける）
     const statusStrip = el('div', 'status-strip');
     statusStrip.setAttribute('aria-label', 'ターンと順番');
+    // 手番・順番は元々 aria-live 付きの #dock 内に出していた。帯へ移したので、
+    // 帯自体をライブリージョンにして手番交代が支援技術にも伝わるようにする
+    statusStrip.setAttribute('aria-live', 'polite');
+    statusStrip.setAttribute('aria-atomic', 'true');
     this.statusEl = statusStrip;
     // 3D盤面の置き場所（盤面の下に敷く。DOMのマスは同期元として裏に残し、見せない）
     const holder3d = el('div', 'board-3d');
@@ -875,6 +879,10 @@ export class View {
     const sel = this.selectable(s, myTurn);
     this.onTileClick = sel?.onPick ?? null;
     this.selectionActive = !!sel;
+    // フォーカスの受け渡し用に、描画時点でフォーカスが当たっているタイルを覚える
+    // （理由は末尾の受け渡し処理のコメント参照）
+    const ae0 = document.activeElement;
+    const focusedTile = ae0 instanceof HTMLElement && ae0.classList.contains('tile') ? ae0 : null;
     const ph = s.phase;
     const highlight = (ph.kind === 'buy' || ph.kind === 'build' || ph.kind === 'buyout') && !x.busy ? ph.square : -1;
 
@@ -946,11 +954,16 @@ export class View {
       );
     });
 
-    // フォーカスの取り残し防止：選択フェーズの対象から外れて tabindex を失ったタイルに
-    // フォーカスが残っていると、その輪郭だけが盤面の外に浮いて見えることがある。
-    // フォーカス可能なタイル（対象のマス／詳細ボタン）の間は残し、それ以外は外す
-    const ae = document.activeElement;
-    if (ae instanceof HTMLElement && ae.classList.contains('tile') && !ae.hasAttribute('tabindex')) ae.blur();
+    // フォーカスの受け渡し：選択フェーズの対象から外れたタイルにフォーカスが
+    // あると、上のループで tabindex を外した瞬間にブラウザがフォーカスを落として
+    // しまう（描画後に activeElement を見ても手遅れ）。交換・移築のように続けて
+    // 2つ目のマスを選ぶ場面でキーボード操作のフォーカス先が消えないよう、
+    // 描画前に覚えたタイルが対象から外れていたら、まだ選べるタイルの先頭へ移す
+    if (focusedTile && !focusedTile.hasAttribute('tabindex')) {
+      const next = sel ? this.tiles.find((t) => t.hasAttribute('tabindex')) : undefined;
+      if (next) next.focus();
+      else focusedTile.blur();
+    }
   }
 
   private tileTitle(s: GameState, sq: Square): string {
@@ -1123,20 +1136,35 @@ export class View {
     body.append(status);
   }
 
+  /** 帯に最後に出した内容のキー。同じ内容の再描画で読み上げを繰り返さないために持つ */
+  private lastStatusKey = '';
+
+  /**
+   * ターン・手番・順番の帯を差し替える。帯は aria-live のライブリージョンなので、
+   * 再描画のたびに差し替えると支援技術への通知が過剰になる。内容（本文＋割り込み表示に
+   * 効くフェーズ情報）が変わったときだけ差し替える
+   */
+  private commitStatus(status: HTMLElement, s: GameState) {
+    const responder = s.phase.kind === 'react' ? s.phase.responder : -1;
+    const key = `${s.phase.kind}|${responder}|${status.textContent}`;
+    if (key === this.lastStatusKey) return;
+    this.lastStatusKey = key;
+    this.statusEl.replaceChildren(status);
+  }
+
   private renderCenter(s: GameState, x: ViewExtras, myTurn: boolean) {
     this.centerEl.replaceChildren();
     this.dockEl.replaceChildren();
-    this.statusEl.replaceChildren();
     // ターン・手番・順番は、盤面エリアの内側・上部の帯（.status-strip）へ小さく重ねて出す。
     // 盤面の下（ドック）は上から 操作パネル（ゲージ→ボタン）→ イベント表示 の順にし、
     // 縦画面でもスクロールせずにダイスボタンへ届くようにする。
     // サイコロは3D側が盤面中央（リングの空きスペース）に出すので、DOMでは出さない
     const status = el('div', 'center-status');
-    this.statusEl.append(status);
     status.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
 
     const host = this.dockEl;
     if (s.phase.kind === 'gameover') {
+      this.commitStatus(status, s);
       host.append(this.resultPanel(s, x));
       return;
     }
@@ -1153,6 +1181,7 @@ export class View {
     whose.append(dot, isCpu ? `${me.name} の番（CPU）` : `${me.name} の番`);
     status.append(whose);
     status.append(this.orderBar(s, x));
+    this.commitStatus(status, s);
 
     // 操作パネルを先に出す（サイコロの番なら ゲージ→ボタン が盤面のすぐ下に来る）
     const panel = this.pendingFly
