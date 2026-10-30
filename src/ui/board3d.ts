@@ -63,8 +63,11 @@ const STEP = 1.12;
 const TILE = 1.04;
 /** マスの厚み */
 const TILE_H = 0.16;
-/** カメラの基本距離。盤面の1辺（約10単位）がほぼ収まる距離にして、寄りすぎないようにする */
-const CAM_DIST = 12.3;
+/**
+ * カメラの基本距離。盤面の1辺（約10単位）がほぼ収まる距離にして、寄りすぎないようにする。
+ * 以前は 12.3 だったが、「初期表示をもう少し寄りに」という要望で少し寄せた
+ */
+const CAM_DIST = 11.4;
 /**
  * 横方向に最低限収めたい半幅（狭い画面でカメラを引くときの目安、実測ベース）。
  * 内訳：端マス中心 4.48 ＋ ラベル半幅 0.67 ＋ 手前側のマスが透視で大きく写る分の余裕。
@@ -75,6 +78,12 @@ const CAM_DIST = 12.3;
 const FIT_HALF_W = 7.7;
 /** カメラの基本の見下ろし角（真上から測った角度）。浅すぎず深すぎない斜め見下ろし */
 const CAM_POLAR = 0.94;
+/**
+ * ズームの範囲（フィット距離に対する倍率）。ホイールとピンチで変えられる。
+ * 近づきすぎて盤面を見失う／離れすぎて盤面が点になる、を防ぐためのクランプ
+ */
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 1.8;
 
 /** 9×9 グリッドの行・列 → 3D座標。2D盤面と同じく、行9が手前（南）、列9が右（東） */
 function cellToXZ(row: number, col: number): { x: number; z: number } {
@@ -504,6 +513,13 @@ export class Board3D {
   private azT = 0;
   private polar = CAM_POLAR;
   private polarT = CAM_POLAR;
+  /** ズーム倍率（現在値と目標値）。1がフィット距離どおりの見え方 */
+  private zoom = 1;
+  private zoomT = 1;
+  /** いま触れているポインタ（2本目が触れたらピンチズームに切り替える） */
+  private pointers = new Map<number, { x: number; y: number }>();
+  /** ピンチ開始時点の指の間隔とズーム倍率 */
+  private pinch: { d: number; zoom: number } | null = null;
   private active = false;
   private raf = 0;
   private lastTime = 0;
@@ -892,17 +908,19 @@ export class Board3D {
       if (t.selectRing.visible) (t.selectRing.material as THREE.MeshBasicMaterial).opacity = pulse;
     }
 
-    // カメラ：見る点は盤面中央で固定し、ドラッグのずれだけを滑らかに反映する。
+    // カメラ：見る点は盤面中央で固定し、ドラッグのずれとズームだけを滑らかに反映する。
     // コマの移動や手番交代では視点を動かさない
     const kCam = 1 - Math.exp(-dt * 5);
     this.az += (this.azT - this.az) * kCam;
     this.polar += (this.polarT - this.polar) * kCam;
+    this.zoom += (this.zoomT - this.zoom) * kCam;
+    const distNow = this.dist * this.zoom;
     const look = new THREE.Vector3(0, 0.15, 0);
     const sp = Math.sin(this.polar);
     const off = new THREE.Vector3(
-      this.dist * sp * Math.sin(this.az),
-      this.dist * Math.cos(this.polar),
-      this.dist * sp * Math.cos(this.az),
+      distNow * sp * Math.sin(this.az),
+      distNow * Math.cos(this.polar),
+      distNow * sp * Math.cos(this.az),
     );
     this.camera.position.copy(look).add(off);
     this.camera.lookAt(look);
@@ -923,15 +941,24 @@ export class Board3D {
     const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     const needDist = FIT_HALF_W / (tanHalf * this.camera.aspect);
     if (needDist > CAM_DIST) {
-      this.dist = Math.min(needDist, CAM_DIST * 1.62);
+      // 上限は基本距離の1.5倍。以前は1.62倍（縦画面で約19.9）だったが、
+      // 縦画面（390×844）でラベルのはみ出しを距離ごとに実測したところ
+      // 約15.5までは切れなかったため、初期表示を寄せるぶん上限を下げた
+      this.dist = Math.min(needDist, CAM_DIST * 1.5);
     }
     this.camera.updateProjectionMatrix();
   }
 
-  /** 検証用：現在のカメラ位置を返す（視点が自動で動いていないことの確認に使う） */
-  debugCamera(): { x: number; y: number; z: number } {
+  /** 検証用：現在のカメラ位置と視点の状態を返す（視点が自動で動いていないことの確認に使う） */
+  debugCamera(): { x: number; y: number; z: number; az: number; zoom: number; dist: number } {
     const p = this.camera.position;
-    return { x: p.x, y: p.y, z: p.z };
+    return { x: p.x, y: p.y, z: p.z, az: this.az, zoom: this.zoom, dist: this.dist * this.zoom };
+  }
+
+  /** 検証用：視点（方位角とズーム倍率）を直接指定する */
+  debugSetView(az: number, zoom = 1) {
+    this.az = this.azT = az;
+    this.zoom = this.zoomT = THREE.MathUtils.clamp(zoom, ZOOM_MIN, ZOOM_MAX);
   }
 
   /**
@@ -987,20 +1014,57 @@ export class Board3D {
     const canvas = this.renderer.domElement;
     canvas.style.touchAction = 'none';
     canvas.addEventListener('pointerdown', (e) => {
-      this.drag = { x: e.clientX, y: e.clientY, az: this.azT, polar: this.polarT, moved: false, at: performance.now() };
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       canvas.setPointerCapture(e.pointerId);
+      if (this.pointers.size === 2) {
+        // 2本目が触れたらピンチズームに切り替える。回転ドラッグは取り消し、
+        // 指を離したときにタップとして誤認もしない
+        const [a, b] = [...this.pointers.values()];
+        this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.zoomT };
+        this.drag = null;
+        this.suppressTapUntil = performance.now() + 250;
+      } else if (this.pointers.size === 1) {
+        this.drag = { x: e.clientX, y: e.clientY, az: this.azT, polar: this.polarT, moved: false, at: performance.now() };
+      }
     });
     canvas.addEventListener('pointermove', (e) => {
+      const p = this.pointers.get(e.pointerId);
+      if (p) {
+        p.x = e.clientX;
+        p.y = e.clientY;
+      }
+      if (this.pinch && this.pointers.size === 2) {
+        // 指を開くと寄り、閉じると引く（距離倍率は指の間隔の比で変える）
+        const [a, b] = [...this.pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (this.pinch.d > 0 && d > 0) {
+          this.zoomT = THREE.MathUtils.clamp(this.pinch.zoom * (this.pinch.d / d), ZOOM_MIN, ZOOM_MAX);
+        }
+        return;
+      }
       const d = this.drag;
       if (!d) return;
       const dx = e.clientX - d.x;
       const dy = e.clientY - d.y;
       if (!d.moved && Math.abs(dx) + Math.abs(dy) < 7) return;
       d.moved = true;
-      this.azT = THREE.MathUtils.clamp(d.az + dx * 0.005, -0.9, 0.9);
+      // 方位角は制限なし（360°ぐるっと回して逆サイドも見られるように）。
+      // 極角だけは、真上・真横を越えて盤面が裏返らない範囲に留める
+      this.azT = d.az + dx * 0.005;
       this.polarT = THREE.MathUtils.clamp(d.polar + dy * 0.003, 0.58, 1.28);
     });
+    const release = (e: PointerEvent): boolean => {
+      const wasPinch = this.pinch !== null;
+      this.pointers.delete(e.pointerId);
+      if (this.pointers.size < 2) this.pinch = null;
+      return wasPinch;
+    };
     const end = (e: PointerEvent) => {
+      if (release(e)) {
+        this.drag = null;
+        this.suppressTapUntil = performance.now() + 250;
+        return;
+      }
       const d = this.drag;
       this.drag = null;
       if (!d) return;
@@ -1013,9 +1077,19 @@ export class Board3D {
       this.tapAt(e.clientX, e.clientY);
     };
     canvas.addEventListener('pointerup', end);
-    canvas.addEventListener('pointercancel', () => {
+    canvas.addEventListener('pointercancel', (e) => {
+      release(e);
       this.drag = null;
     });
+    // マウスホイールでも寄せ・引きができるようにする（上に回すと寄る）
+    canvas.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        this.zoomT = THREE.MathUtils.clamp(this.zoomT * Math.exp(e.deltaY * 0.0012), ZOOM_MIN, ZOOM_MAX);
+      },
+      { passive: false },
+    );
   }
 
   /** タップ位置のマスを Raycaster で拾って view へ渡す */

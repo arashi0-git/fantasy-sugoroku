@@ -58,6 +58,7 @@ const view = new View(
   document.getElementById('players')!,
   document.getElementById('log')!,
   document.getElementById('dock')!,
+  document.getElementById('stage')!,
   document.getElementById('hand')!,
   {
     roll: (aim) => humanAct({ type: 'roll', aim }),
