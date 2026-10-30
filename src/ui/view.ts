@@ -141,7 +141,7 @@ export interface SettingsHooks {
 /**
  * ログイン（アカウント）まわりの受け口。状態の実体は main 側の AuthService が持ち、
  * タイトル画面のログイン表示とログインダイアログはこの受け口越しに読み書きする。
- * フェーズ2ではログイン基盤までで、対戦開始のゲートとプロフィール同期はまだ行わない。
+ * 対戦開始のゲートとプロフィール同期は main 側（AuthService／ProfileSync）で配線する。
  */
 export interface AuthHooks {
   getState(): AuthState;
@@ -797,6 +797,11 @@ export class View {
     this.syncAuthDialog();
     this.authEl.hidden = false;
     this.authBody.querySelector<HTMLElement>('input, button')?.focus();
+  }
+
+  /** ログインダイアログを外から開く（対戦開始ゲートが未ログイン時に使う） */
+  openLoginDialog() {
+    this.openAuthDialog();
   }
 
   private closeAuthDialog() {
@@ -2617,7 +2622,7 @@ export class View {
     startBtn.addEventListener('click', () => onStart());
     wrap.append(startBtn);
     // アカウント表示（ログイン導線／ログイン中のアドレスとログアウト）。
-    // フェーズ2では導線だけを置き、未ログインでも従来どおり遊べる（ゲートはフェーズ3）
+    // 対戦開始の可否（全員ログイン制のゲート）は main 側の共通遷移パスで強制する
     const account = el('div', 'title-account');
     this.accountArea = account;
     wrap.append(account);
