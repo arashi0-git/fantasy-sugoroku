@@ -8,7 +8,8 @@ import { CHARACTER_LIST, CHARACTERS, CharacterId } from './data/characters';
 import { NavTab, SpeedMode, View, ViewExtras } from './ui/view';
 import { playForLog, setSoundEnabled, soundEnabled } from './ui/sound';
 import { applyGameResult, levelOf, loadProfile, Profile, saveProfile } from './meta/profile';
-import { createAuthService } from './meta/supabase';
+import { createAuthService, createProfileStore } from './meta/supabase';
+import { ProfileSync, startGateDecision } from './meta/sync';
 import { drawGacha, seededRand } from './meta/gacha';
 import { grownStats } from './meta/growth';
 
@@ -118,8 +119,8 @@ view.setSettingsHooks({
 });
 
 // アカウント（ログイン）の基盤：状態の実体は AuthService が持ち、タイトル画面の
-// ログイン表示とダイアログは受け口越しに読み書きする。フェーズ2ではここまでで、
-// 対戦開始のゲートとプロフィール同期はフェーズ3で配線する（未ログインでも遊べる）
+// ログイン表示とダイアログは受け口越しに読み書きする。
+// フェーズ3：対戦開始のゲート（全員ログイン制）とプロフィール同期もここで配線する
 const authService = createAuthService();
 view.setAuthHooks({
   getState: () => authService.getState(),
@@ -127,6 +128,65 @@ view.setAuthHooks({
   signInWithEmail: (email) => authService.signInWithEmail(email),
   signInWithGoogle: () => authService.signInWithGoogle(),
   signOut: () => authService.signOut(),
+});
+
+// プロフィールの端末間同期（ローカルファースト。サーバーは控え）。
+// サーバー側のプロフィールを採用したときは、保持中のプロフィールを差し替えて
+// 表示中の画面を描き直す
+const profileSync = new ProfileSync({
+  store: createProfileStore(),
+  storage: {
+    getItem: (key) => {
+      try {
+        return window.localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setItem: (key, value) => {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch {
+        /* 保存できない環境では同期なしで続ける */
+      }
+    },
+  },
+  onProfileAdopted: (adopted) => {
+    profile = adopted;
+    if (screen === 'title') showTitleScreen();
+    else if (screen === 'select') start();
+    else if (screen === 'gacha') openGacha();
+    else if (screen === 'collection') openCollection();
+    if (extras) extras.profile = adopted;
+  },
+});
+
+/** プロフィールの保存経路：localStorage へ即保存し、同期層へも知らせる */
+function persistProfile() {
+  saveProfile(profile);
+  profileSync.noteLocalSave();
+}
+
+// ---- 対戦開始ゲート（全員ログイン制） ----
+// 「はじめる」を押した時点で未ログインなら、開始を保留してまずログインを促す。
+// ログインが完了したら、保留していた開始をそのまま進める。保留は画面遷移
+// （startToken の進行）で無効化され、別画面へ移った後の誤発を防ぐ。
+let pendingGateToken: number | null = null;
+let pendingGateDialogOpened = false;
+authService.subscribe((state) => {
+  if (pendingGateToken === null) return;
+  if (pendingGateToken !== startToken) {
+    pendingGateToken = null;
+    return;
+  }
+  const gate = startGateDecision(state.status);
+  if (gate === 'allow') {
+    pendingGateToken = null;
+    goTo('select');
+  } else if (gate === 'needLogin' && !pendingGateDialogOpened) {
+    pendingGateDialogOpened = true;
+    view.openLoginDialog();
+  }
 });
 
 /**
@@ -198,6 +258,17 @@ function goTo(target: AppScreen, push = true) {
   if (target === 'select') {
     // 対戦開始の可否は、この共通パスで一元的に強制する（入口がタイトルボタンでも
     // ブラウザ履歴でも、ここを通らない限りキャラ選択＝対戦開始には進めない）
+    //
+    // 全員ログイン制のゲート：未ログインでは対戦を始められない。未ログインなら
+    // ログインダイアログを出して開始を保留し、ログイン状態の確認中なら確定を待つ。
+    // ログインが完了したら、保留していた開始をそのまま進める（購読側の処理）
+    const gate = startGateDecision(authService.getState().status);
+    if (gate !== 'allow') {
+      pendingGateToken = startToken;
+      pendingGateDialogOpened = gate === 'needLogin';
+      if (gate === 'needLogin') view.openLoginDialog();
+      return;
+    }
     if (view.boardFailed) {
       // 3Dを表示できない環境では進ませない。履歴の指す先をタイトルに置き換え、
       // タイトルに留まってエラーを出す
@@ -229,6 +300,8 @@ function goTo(target: AppScreen, push = true) {
   if (target === 'title') {
     selectEl.hidden = true;
     showTitleScreen();
+    // 同期の取りこぼし防止（未送信分の再送・突き合わせのやり直し）
+    void profileSync.retrySync();
   } else if (target === 'gacha') {
     titleEl.hidden = true;
     openGacha();
@@ -450,7 +523,7 @@ function settleReward() {
     reason: state.phase.reason,
   });
   profile = next;
-  saveProfile(profile);
+  persistProfile();
   extras.profile = profile;
   extras.reward = { ...reward, charName: CHARACTERS[me.character].name, rank };
   view.render(state, extras);
@@ -462,10 +535,11 @@ function showTitleScreen() {
 }
 
 /**
- * 「ゲームをはじめる」の先。対戦開始の可否（3D盤面の先読みの成否）は、
- * 共通の遷移パスである goTo('select') が一元的に強制する：
- * 先読み中は完了まで遷移を保留し、失敗していたら対戦を始めずタイトルに留まって
- * エラーを出す（2Dへの代替表示はしない。通常のゲームと同様、表示できない環境では始めない）。
+ * 「ゲームをはじめる」の先。対戦開始の可否（全員ログイン制のゲートと、
+ * 3D盤面の先読みの成否）は、共通の遷移パスである goTo('select') が一元的に強制する：
+ * 未ログインならダイアログを出して開始を保留し、先読み中は完了まで遷移を保留し、
+ * 先読みに失敗していたら対戦を始めずタイトルに留まってエラーを出す
+ * （2Dへの代替表示はしない。通常のゲームと同様、表示できない環境では始めない）。
  * 入口ごとの個別チェックに頼らず、ここでは共通パスへ委ねるだけにする
  */
 function startFlow() {
@@ -478,7 +552,7 @@ function openGacha() {
       const out = drawGacha(profile, count, seededRand(Date.now()));
       if (!out) return null;
       profile = out.profile;
-      saveProfile(profile);
+      persistProfile();
       return out;
     },
     back: () => goTo('title'),
@@ -489,7 +563,7 @@ function openCollection() {
   view.showCollection(document.getElementById('select')!, profile, {
     equip: (kind, id) => {
       profile = { ...profile, equipped: { ...profile.equipped, [kind]: id } };
-      saveProfile(profile);
+      persistProfile();
       return profile;
     },
     back: () => goTo('title'),
@@ -499,6 +573,12 @@ function openCollection() {
 /** 起動直後はタイトル画面。「はじめる」を押したらキャラ選びへ */
 function boot() {
   replaceScreen('title');
+  // プロフィール同期をログイン状態へ連動させてから、セッション復元を始める
+  profileSync.start(authService);
+  // オンライン復帰時に未送信分の再送を試みる（失敗してもゲームは止めない）
+  window.addEventListener('online', () => {
+    void profileSync.retrySync();
+  });
   // 保存済みセッションの復元と、ログイン状態の購読を始める（失敗しても起動は止めない）
   void authService.init();
   // 3D盤面の先読みの成否が確定したら、失敗の場合だけタイトルにエラーを出す
