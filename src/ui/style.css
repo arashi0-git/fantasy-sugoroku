@@ -2761,7 +2761,8 @@ body.in-game {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   min-height: 32px;
   margin-top: 2px;
 }
@@ -2789,6 +2790,29 @@ body.in-game {
 }
 .title-account-btn:hover {
   border-color: var(--on-table);
+}
+/* 同期状態の小さな表示（アカウント行の末尾。控えめに出し、未送信のときだけ少し目立たせる） */
+.title-sync-status {
+  color: var(--on-table-soft);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.title-sync-status[data-status='pending'] {
+  color: #e8c97a;
+}
+.title-sync-status[data-status='synced'] {
+  color: #9fd8ae;
+}
+/* 設定パネルの「アカウントを削除」（危険操作なので赤系で区別する） */
+.settings-delete {
+  background: transparent;
+  color: #ff9d94;
+  border: 1px solid var(--danger);
+  box-shadow: none;
+}
+.settings-delete:hover {
+  background: rgb(216 69 58 / 0.14);
 }
 
 .auth-overlay {

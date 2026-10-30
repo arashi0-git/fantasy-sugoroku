@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AuthState } from './auth';
 import { defaultProfile, parseProfile, PROFILE_KEY, serializeProfile, type Profile } from './profile';
 import {
+  deriveSyncStatus,
   ProfileSync,
   startGateDecision,
   SYNC_META_KEY,
@@ -56,6 +57,7 @@ function fakeStore(row: ProfileRow | null = null) {
   let current = row;
   let failFetch = false;
   let failUpsert = false;
+  let failDelete = false;
   const store: ProfileStoreApi = {
     fetchOwnProfile: vi.fn(async () => {
       if (failFetch) throw new Error('network');
@@ -67,6 +69,10 @@ function fakeStore(row: ProfileRow | null = null) {
       current = { data: JSON.parse(JSON.stringify(data)) as unknown, updatedAt };
       return { updatedAt };
     }),
+    deleteOwnProfile: vi.fn(async () => {
+      if (failDelete) throw new Error('network');
+      current = null;
+    }),
   };
   return {
     store,
@@ -75,6 +81,9 @@ function fakeStore(row: ProfileRow | null = null) {
     },
     setFailUpsert(v: boolean) {
       failUpsert = v;
+    },
+    setFailDelete(v: boolean) {
+      failDelete = v;
     },
     getRow: () => current,
   };
@@ -326,5 +335,172 @@ describe('同期メタの読み込み', () => {
     const { store } = fakeStore(null);
     const sync = makeSync({ storage, store });
     expect(sync.getMeta()).toEqual({ updatedAt: 0, dirty: false, userId: null });
+  });
+});
+
+describe('同期状態の導出（フェーズ4）', () => {
+  it('未ログイン・確認中・未送信・同期済みを区別する', () => {
+    const base = { dirty: false, reconciled: true, reconcileFailed: false };
+    expect(deriveSyncStatus({ ...base, authStatus: 'signedOut' })).toBe('signedOut');
+    expect(deriveSyncStatus({ ...base, authStatus: 'unknown' })).toBe('checking');
+    // ログイン直後で突き合わせ前は確認中、突き合わせ失敗時は再試行待ち（未送信扱い）
+    expect(deriveSyncStatus({ ...base, authStatus: 'signedIn', reconciled: false })).toBe('checking');
+    expect(deriveSyncStatus({ ...base, authStatus: 'signedIn', reconciled: false, reconcileFailed: true })).toBe('pending');
+    expect(deriveSyncStatus({ ...base, authStatus: 'signedIn', dirty: true })).toBe('pending');
+    expect(deriveSyncStatus({ ...base, authStatus: 'signedIn' })).toBe('synced');
+  });
+});
+
+describe('同期状態の遷移と通知', () => {
+  /** ログイン済みで突き合わせ完了（同期済み）まで進めた同期層を用意する */
+  async function syncedSetup() {
+    const { storage, map } = fakeStorage({ [PROFILE_KEY]: serializeProfile(richProfile(0)) });
+    const f = fakeStore({
+      data: JSON.parse(serializeProfile(richProfile(0))),
+      updatedAt: new Date(T0).toISOString(),
+    });
+    const sync = makeSync({ storage, store: f.store, now: () => T0 + 10_000 });
+    const auth = fakeAuth();
+    const seen: string[] = [];
+    sync.subscribeSyncStatus((s) => seen.push(s));
+    sync.start(auth.source);
+    auth.signIn(USER_A);
+    await sleep(30);
+    vi.mocked(f.store.upsertOwnProfile).mockClear();
+    return { sync, map, f, auth, seen };
+  }
+
+  it('ログイン→突き合わせ完了で同期済みになり、変化が通知される', async () => {
+    const { sync, seen } = await syncedSetup();
+    expect(sync.getSyncStatus()).toBe('synced');
+    expect(seen).toContain('checking');
+    expect(seen.at(-1)).toBe('synced');
+  });
+
+  it('未ログインでは未ログイン状態で、開始前は確認中', async () => {
+    const { storage } = fakeStorage({});
+    const { store } = fakeStore(null);
+    const sync = makeSync({ storage, store });
+    const auth = fakeAuth();
+    sync.start(auth.source);
+    expect(sync.getSyncStatus()).toBe('checking'); // 認証状態がまだ unknown
+    auth.signOut();
+    expect(sync.getSyncStatus()).toBe('signedOut');
+  });
+
+  it('保存で未送信になり、送信成功で同期済みに戻る', async () => {
+    const { sync, map } = await syncedSetup();
+    map.set(PROFILE_KEY, serializeProfile(richProfile(100)));
+    sync.noteLocalSave();
+    expect(sync.getSyncStatus()).toBe('pending');
+    await sleep(30);
+    expect(sync.getSyncStatus()).toBe('synced');
+  });
+
+  it('オフラインで送信に失敗すると未送信のままになり、復帰後の再送で同期済みに戻る', async () => {
+    const { sync, map, f } = await syncedSetup();
+    f.setFailUpsert(true);
+    map.set(PROFILE_KEY, serializeProfile(richProfile(100)));
+    sync.noteLocalSave();
+    await sleep(30);
+    expect(sync.getSyncStatus()).toBe('pending');
+    f.setFailUpsert(false);
+    await sync.retrySync();
+    expect(sync.getSyncStatus()).toBe('synced');
+  });
+
+  it('ログイン時の取得に失敗すると未送信（再試行待ち）表示になり、再試行で同期済みに戻る', async () => {
+    const { storage } = fakeStorage({ [PROFILE_KEY]: serializeProfile(richProfile(3)) });
+    const f = fakeStore({
+      data: JSON.parse(serializeProfile(richProfile(3))),
+      updatedAt: new Date(T0).toISOString(),
+    });
+    f.setFailFetch(true);
+    const sync = makeSync({ storage, store: f.store });
+    const auth = fakeAuth();
+    sync.start(auth.source);
+    auth.signIn(USER_A);
+    await sleep(30);
+    expect(sync.getSyncStatus()).toBe('pending');
+    f.setFailFetch(false);
+    await sync.retrySync();
+    await sleep(10);
+    expect(sync.getSyncStatus()).toBe('synced');
+  });
+});
+
+describe('アカウント削除と端末データの初期化（フェーズ4）', () => {
+  async function syncedSetup() {
+    const local = richProfile(500);
+    const { storage, map } = fakeStorage({ [PROFILE_KEY]: serializeProfile(local) });
+    const f = fakeStore({
+      data: JSON.parse(serializeProfile(richProfile(500))),
+      updatedAt: new Date(T0).toISOString(),
+    });
+    const adopted: Profile[] = [];
+    const sync = makeSync({ storage, store: f.store, onProfileAdopted: (p) => adopted.push(p) });
+    const auth = fakeAuth();
+    sync.start(auth.source);
+    auth.signIn(USER_A);
+    await sleep(30);
+    adopted.length = 0;
+    vi.mocked(f.store.upsertOwnProfile).mockClear();
+    return { sync, map, f, auth, adopted };
+  }
+
+  it('未ログインでは削除を実行しない', async () => {
+    const { storage } = fakeStorage({ [PROFILE_KEY]: serializeProfile(richProfile(500)) });
+    const f = fakeStore(null);
+    const sync = makeSync({ storage, store: f.store });
+    const result = await sync.deleteAccount();
+    expect(result.ok).toBe(false);
+    expect(f.store.deleteOwnProfile).not.toHaveBeenCalled();
+  });
+
+  it('削除するとサーバーの自分の行が消え、端末のプロフィールと同期メタが初期化される', async () => {
+    const { sync, map, f, adopted } = await syncedSetup();
+    const result = await sync.deleteAccount();
+    expect(result).toEqual({ ok: true });
+    expect(f.store.deleteOwnProfile).toHaveBeenCalledTimes(1);
+    expect(f.store.deleteOwnProfile).toHaveBeenCalledWith(USER_A);
+    expect(f.getRow()).toBeNull();
+    expect(parseProfile(map.get(PROFILE_KEY)!)).toEqual(defaultProfile());
+    expect(sync.getMeta()).toEqual({ updatedAt: 0, dirty: false, userId: null });
+    expect(adopted).toEqual([defaultProfile()]);
+  });
+
+  it('サーバー削除に失敗したら、端末のデータは一切消さない', async () => {
+    const { sync, map, f } = await syncedSetup();
+    f.setFailDelete(true);
+    const result = await sync.deleteAccount();
+    expect(result.ok).toBe(false);
+    expect(parseProfile(map.get(PROFILE_KEY)!).coins).toBe(500); // ローカルはそのまま
+    expect(sync.getMeta().userId).toBe(USER_A); // 同期メタもそのまま
+    expect(f.getRow()).not.toBeNull();
+  });
+
+  it('削除後はログアウト状態になり、保存してもサーバーへ送られない', async () => {
+    const { sync, map, f, auth } = await syncedSetup();
+    await sync.deleteAccount();
+    auth.signOut(); // main 側の配線（削除→ログアウト）を再現
+    expect(sync.getSyncStatus()).toBe('signedOut');
+    map.set(PROFILE_KEY, serializeProfile(richProfile(42)));
+    sync.noteLocalSave();
+    await sleep(30);
+    expect(f.store.upsertOwnProfile).not.toHaveBeenCalled();
+  });
+
+  it('resetLocalData はサーバーに触らず端末だけを初期化する', async () => {
+    const { sync, map, f, adopted } = await syncedSetup();
+    map.set(PROFILE_KEY, serializeProfile(richProfile(900)));
+    sync.noteLocalSave();
+    sync.resetLocalData();
+    expect(parseProfile(map.get(PROFILE_KEY)!)).toEqual(defaultProfile());
+    expect(sync.getMeta()).toEqual({ updatedAt: 0, dirty: false, userId: null });
+    expect(adopted).toEqual([defaultProfile()]);
+    expect(f.store.deleteOwnProfile).not.toHaveBeenCalled();
+    expect(f.getRow()).not.toBeNull(); // サーバー側は残る（再ログインで復元される）
+    await sleep(30);
+    expect(f.store.upsertOwnProfile).not.toHaveBeenCalled(); // 初期化した内容も送らない
   });
 });
