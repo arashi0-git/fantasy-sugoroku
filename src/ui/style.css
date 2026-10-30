@@ -1739,8 +1739,7 @@ button.hand-card:hover:not(:disabled) {
   flex-shrink: 0;
 }
 .dock .panel,
-.dock .gauge-wrap,
-.dock .card-notice {
+.dock .gauge-wrap {
   width: 100%;
 }
 .dock .actions .btn {
@@ -1749,8 +1748,26 @@ button.hand-card:hover:not(:disabled) {
 .dock .choice-list {
   max-height: 40vh;
 }
-.dock .notice {
+
+/* セリフと出来事表示の置き場所。ドック（操作パネル）の後ろに続く。
+   横画面・PCでは従来ドックの中にあった表示がそのままここへ来るので、
+   サイド列の gap（16px）では従来のドック内 gap（8px）より間が空くぶん詰める */
+.stage:empty {
+  display: none;
+}
+.stage {
+  display: grid;
+  gap: 8px;
+  margin-top: -8px;
+}
+.stage .card-notice {
+  width: 100%;
+}
+.stage .notice {
   text-align: center;
+}
+.stage .say {
+  width: 100%;
 }
 
 /* 盤面の中央にパネルがあるときは、タイトルを隠して場所を空ける */
@@ -1841,18 +1858,29 @@ button.hand-card:hover:not(:disabled) {
   .gauge-wrap .hint {
     display: none;
   }
-  /* 盤面の下の並び順：ドック（ゲージ→ボタン→イベント帯）→出来事ログ→手札→プレイヤー一覧 */
+  /* 盤面の下の並び順：ドック（ゲージ→ボタン）→手札→ステージ（セリフ→出来事の帯・
+     お知らせ）→プレイヤー一覧→出来事ログ（一番下）。
+     ステージは横画面ではドックの後ろに続く置き場所で、縦画面だけこの順に入れ替える */
   .side .dock {
     order: 1;
   }
-  .side .log-wrap {
+  .side .hand {
     order: 2;
   }
-  .side .hand {
+  .side .stage {
     order: 3;
+    /* 横画面・PC向けの詰め（margin-top: -8px）は、ドックの直後でない縦画面では戻す */
+    margin-top: 0;
+  }
+  /* ステージの中では、セリフを出来事の帯・お知らせより先に出す */
+  .side .stage .say {
+    order: -1;
   }
   .side .players {
     order: 4;
+  }
+  .side .log-wrap {
+    order: 5;
   }
   /* スマホでは操作パネルが盤面のすぐ下にくる。下にスクロールしても画面の下に残す */
   .dock {
@@ -1918,9 +1946,6 @@ button.hand-card:hover:not(:disabled) {
   font-size: 12px;
   color: var(--on-table-soft);
 }
-.dock .say {
-  width: 100%;
-}
 .log li.say-log {
   color: var(--on-table-soft);
   font-style: italic;
@@ -1936,7 +1961,7 @@ button.hand-card:hover:not(:disabled) {
   width: min(100%, 360px);
   text-align: center;
 }
-.dock .notice.claim {
+.stage .notice.claim {
   width: 100%;
 }
 

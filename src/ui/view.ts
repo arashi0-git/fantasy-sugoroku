@@ -289,8 +289,13 @@ export class View {
     private centerEl: HTMLElement,
     private playersEl: HTMLElement,
     private logEl: HTMLElement,
-    /** 盤面が小さいときに操作パネルとお知らせを出す場所（横の列のいちばん上。スマホでは盤面の下） */
+    /** 盤面が小さいときに操作パネルを出す場所（横の列のいちばん上。スマホでは盤面の下） */
     private dockEl: HTMLElement,
+    /**
+     * セリフと出来事表示（最新イベントの帯・各種のお知らせ）を出す場所。
+     * 縦画面では手札の後ろに並ぶため、操作パネルとは置き場所を分けている
+     */
+    private stageEl: HTMLElement,
     /** あなたの手札を出す場所 */
     private handEl: HTMLElement,
     private h: ViewHandlers,
@@ -1343,9 +1348,12 @@ export class View {
   private renderCenter(s: GameState, x: ViewExtras, myTurn: boolean) {
     this.centerEl.replaceChildren();
     this.dockEl.replaceChildren();
+    this.stageEl.replaceChildren();
     // ターン・手番・順番は、盤面エリアの内側・上部の帯（.status-strip）へ小さく重ねて出す。
-    // 盤面の下（ドック）は上から 操作パネル（ゲージ→ボタン）→ イベント表示 の順にし、
-    // 縦画面でもスクロールせずにダイスボタンへ届くようにする。
+    // 盤面の下は、操作パネル（ゲージ→ボタン）をドックへ、セリフと出来事表示を
+    // ステージへ分けて出す。縦画面では ドック→手札→ステージ（セリフ→出来事）
+    // →プレイヤー一覧→出来事ログ の順に並ぶため（style.css の order 指定）、
+    // ダイスボタンのすぐ下に手札が来て、出来事は後ろに下がる。
     // サイコロは3D側が盤面中央（リングの空きスペース）に出すので、DOMでは出さない
     const status = el('div', 'center-status');
     status.append(el('p', 'turn', `ターン ${s.turn} / ${s.maxTurns}`));
@@ -1381,21 +1389,23 @@ export class View {
           : this.phasePanel(s, myTurn);
     if (panel) host.append(panel);
 
-    // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）。
-    // イベント表示はボタンの下に置く
+    // ここから下はステージ側（セリフと出来事表示）に出す
+    const stage = this.stageEl;
+
+    // いちばん新しい出来事を大きく出す（ログを追わなくても流れが分かるように）
     const banner = this.eventBanner(s, x);
-    if (banner) host.append(banner);
+    if (banner) stage.append(banner);
 
     // CPU の一言（演出中も出す）
     // カードの結果が同じ人のものなら、吹き出しの下にまとめて場所を節約する
     const merged = !!x.speech && !x.busy && !!s.lastCard && s.lastCard.player === x.speech.player;
-    if (x.speech && !this.pendingCard && !this.pendingFly && !this.tradeDraft) host.append(this.speechBubble(s, x.speech, merged ? s.lastCard : null));
+    if (x.speech && !this.pendingCard && !this.pendingFly && !this.tradeDraft) stage.append(this.speechBubble(s, x.speech, merged ? s.lastCard : null));
 
     // 観光地の守り切り中は、ずっと知らせる
     if (s.touristClaim !== null && !this.pendingCard && !this.pendingFly && !this.tradeDraft) {
       const c = s.players[s.touristClaim];
       const mine = c.id === x.human;
-      host.append(
+      stage.append(
         el(
           'p',
           'notice claim',
@@ -1409,10 +1419,10 @@ export class View {
     // 直前の出来事（カード・支払い・ゾロ目）。カードの対象や取引を選んでいる間は、場所を空けるために出さない
     if (!x.busy && !this.pendingCard && !this.pendingFly && !this.tradeDraft) {
       const ph = s.phase.kind;
-      if (s.lastMission) host.append(this.missionNotice(s));
-      if (s.lastCard && !merged) host.append(this.cardNotice(s));
-      if (s.lastPayment && ph !== 'buyout') host.append(this.paymentNotice(s));
-      if (ph === 'roll' && s.doublesInRow > 0) host.append(el('p', 'notice', 'ゾロ目！ もう一度振れます'));
+      if (s.lastMission) stage.append(this.missionNotice(s));
+      if (s.lastCard && !merged) stage.append(this.cardNotice(s));
+      if (s.lastPayment && ph !== 'buyout') stage.append(this.paymentNotice(s));
+      if (ph === 'roll' && s.doublesInRow > 0) stage.append(el('p', 'notice', 'ゾロ目！ もう一度振れます'));
     }
   }
 
