@@ -9,6 +9,7 @@ import { GameReward, levelOf, ownsChar, Profile, unownedChars, xpProgress } from
 import { COSMETIC_KIND_NAMES, COSMETIC_LIST, CosmeticKind, cosmeticById } from '../meta/cosmetics';
 import { GachaResult, isRareResult, PITY_LIMIT } from '../meta/gacha';
 import type { AuthActionResult, AuthState } from '../meta/auth';
+import type { SyncStatus } from '../meta/sync';
 import { grownStats } from '../meta/growth';
 import type { Board3D } from './board3d';
 import {
@@ -150,6 +151,23 @@ export interface AuthHooks {
   signInWithEmail(email: string): Promise<AuthActionResult>;
   signInWithGoogle(): Promise<AuthActionResult>;
   signOut(): Promise<void>;
+  /**
+   * アカウント削除（サーバーのプロフィール削除＋端末の初期化＋ログアウトまでを main 側が担う）。
+   * 確認ダイアログは View 側で出すため、ここは確認済みの前提で実行だけを行う
+   */
+  deleteAccount?(): Promise<AuthActionResult>;
+  /** ログアウトし、あわせてこの端末のローカルデータも初期化する（共有端末向け・§11） */
+  signOutAndWipeLocal?(): Promise<void>;
+}
+
+/**
+ * プロフィール同期の状態表示の受け口。状態の実体は main 側の ProfileSync が持ち、
+ * タイトル画面のアカウント行に出す小さな表示だけをここで担う（フェーズ4）。
+ */
+export interface SyncHooks {
+  getStatus(): SyncStatus;
+  /** 状態が変わったら呼ばれる。戻り値は購読解除関数 */
+  subscribe(listener: (status: SyncStatus) => void): () => void;
 }
 
 export interface ViewExtras {
@@ -442,6 +460,18 @@ export class View {
     soundRow.append(el('span', 'speed-label', '効果音'), soundBtn);
     box.append(soundRow);
 
+    // アカウント削除（ログイン中のみ出す。決定⑦の導線）。確認ダイアログは
+    // requestDeleteAccount が担い、実行の実体は main 側の受け口にある
+    const deleteBtn = el('button', 'btn settings-delete', 'アカウントを削除');
+    deleteBtn.type = 'button';
+    deleteBtn.addEventListener('click', () => {
+      void this.requestDeleteAccount();
+    });
+    const accountRow = el('div', 'settings-row settings-account-row');
+    accountRow.append(el('span', 'speed-label', 'アカウント'), deleteBtn);
+    accountRow.hidden = true;
+    box.append(accountRow);
+
     // 対戦を中断する（対戦中のみ出す）。対戦中はタブバーが隠れているため、
     // 対戦をやめてタイトルへ戻る導線はここに置く。確認ダイアログは main 側が担う
     const quitBtn = el('button', 'btn settings-quit', 'ゲームを中断する');
@@ -483,6 +513,8 @@ export class View {
       soundBtn.textContent = sound ? '🔊 オン' : '🔇 オフ';
       soundBtn.setAttribute('aria-pressed', String(sound));
       quitRow.hidden = !(this.settingsHooks?.inGame?.() ?? false);
+      // アカウント削除の導線はログイン中だけ出す（未ログインでは消す対象がない）
+      accountRow.hidden = this.authHooks?.getState().status !== 'signedIn';
     };
     this.syncSettings = sync;
     sync();
@@ -726,6 +758,8 @@ export class View {
   private authEl!: HTMLElement;
   private authBody!: HTMLElement;
   private authHooks: AuthHooks | null = null;
+  /** 同期状態の表示の受け口（タイトル画面のアカウント行に出す） */
+  private syncHooks: SyncHooks | null = null;
   /** タイトル画面内のアカウント表示エリア（showTitle のたびに作り直す） */
   private accountArea: HTMLElement | null = null;
   /** ダイアログ内のお知らせ（送信完了・エラー）。再描画をまたいで保持する */
@@ -738,9 +772,33 @@ export class View {
     this.authHooks = h;
     h.subscribe(() => {
       this.renderAccountArea();
+      this.syncSettings?.();
       if (!this.authEl.hidden) this.syncAuthDialog();
     });
     this.renderAccountArea();
+  }
+
+  /** 同期状態の表示の受け口を登録する（状態が変わるたびにアカウント行を作り直す） */
+  setSyncHooks(h: SyncHooks) {
+    this.syncHooks = h;
+    h.subscribe(() => {
+      this.renderAccountArea();
+    });
+    this.renderAccountArea();
+  }
+
+  /** 同期状態の小さな表示（アカウント行の末尾に出す。状態ごとに文言と色を変える） */
+  private syncStatusEl(): HTMLElement {
+    const status = this.syncHooks?.getStatus() ?? 'signedOut';
+    const labels: Record<SyncStatus, string> = {
+      signedOut: '☁ 未ログイン',
+      checking: '☁ 同期を確認中…',
+      pending: '☁ 未送信の変更あり',
+      synced: '☁ 同期済み',
+    };
+    const span = el('span', 'title-sync-status', labels[status]);
+    span.dataset.status = status;
+    return span;
   }
 
   /** タイトル画面のアカウント表示（未ログインならログイン導線、ログイン中ならアドレスとログアウト） */
@@ -756,17 +814,65 @@ export class View {
       const logout = el('button', 'title-account-btn', 'ログアウト');
       logout.type = 'button';
       logout.addEventListener('click', () => {
-        void hooks.signOut();
+        void this.confirmSignOut();
       });
       area.append(logout);
+      // アカウントまわりの操作（端末データの消去・アカウント削除）の入口。
+      // 設定パネルは対戦画面からしか開けないため、タイトルからはここを入口にする
+      const manage = el('button', 'title-account-btn', 'アカウント管理');
+      manage.type = 'button';
+      manage.addEventListener('click', () => this.openAuthDialog());
+      area.append(manage);
+      area.append(this.syncStatusEl());
     } else if (state.status === 'signedOut') {
       const login = el('button', 'title-account-btn', 'ログイン');
       login.type = 'button';
       login.addEventListener('click', () => this.openAuthDialog());
       area.append(login);
+      area.append(this.syncStatusEl());
     } else {
       area.append(el('span', 'title-account-note', 'ログイン状態を確認中…'));
     }
+  }
+
+  /**
+   * ログアウトの確認（§7・§11）。端末の控えは消えず、再ログインで続きになることを
+   * 先に伝えてから実行する。キャンセルしたら何もしない
+   */
+  private async confirmSignOut(): Promise<void> {
+    const hooks = this.authHooks;
+    if (!hooks) return;
+    const ok = await this.confirmDialog(
+      'ログアウトしますか？この端末に残っているデータは消えません。同じアカウントでログインし直せば、続きから遊べます。',
+      'ログアウト',
+    );
+    if (!ok) return;
+    await hooks.signOut();
+  }
+
+  /**
+   * アカウント削除の導線（決定⑦）。削除される内容を明示する確認と最終確認の
+   * 2段階を経たときだけ実行する。途中でキャンセルしたら何も起きない。
+   * 実行の実体（サーバー削除＋端末初期化＋ログアウト）は main 側の受け口が担う
+   */
+  private async requestDeleteAccount(): Promise<void> {
+    const hooks = this.authHooks;
+    if (!hooks?.deleteAccount) return;
+    if (hooks.getState().status !== 'signedIn') return;
+    const step1 = await this.confirmDialog(
+      'アカウントを削除しますか？サーバーに保存されたプロフィール（スターコイン・所持キャラ・育成状況）と、この端末のデータがすべて消えます。消したデータは元に戻せません。',
+      '削除に進む',
+    );
+    if (!step1) return;
+    const step2 = await this.confirmDialog('最終確認です。本当にアカウントを削除しますか？', '完全に削除する');
+    if (!step2) return;
+    const result = await hooks.deleteAccount();
+    this.closeSettings();
+    if (!result.ok) {
+      await this.confirmDialog(result.message, '閉じる');
+      return;
+    }
+    this.closeAuthDialog();
   }
 
   /** ログインダイアログの土台を1回だけ作る（設定パネルと同じオーバーレイ方式） */
@@ -835,9 +941,43 @@ export class View {
       logout.type = 'button';
       logout.addEventListener('click', () => {
         this.authNotice = null;
-        void hooks.signOut();
+        void this.confirmSignOut();
       });
       body.append(logout);
+      // ログアウトしても端末のデータは残ることの明示と、共有端末向けに
+      // 「端末のデータも消す」ログアウトも選べるようにする（§7・§11）
+      body.append(
+        el('p', 'auth-note', 'ログアウトしても、この端末に残っているデータは消えません。他の人の端末で遊んだときは、下のボタンで端末のデータも消せます。'),
+      );
+      if (hooks.signOutAndWipeLocal) {
+        const wipe = el('button', 'btn quiet auth-wide', 'ログアウトして、この端末のデータも消す');
+        wipe.type = 'button';
+        wipe.addEventListener('click', () => {
+          void (async () => {
+            const ok = await this.confirmDialog(
+              'この端末のデータを消してログアウトしますか？この端末のプロフィールは初期状態に戻ります。サーバーに保存されたデータは残るため、同じアカウントでログインし直すと元に戻ります。',
+              'データを消してログアウト',
+            );
+            if (!ok) return;
+            this.authNotice = null;
+            await hooks.signOutAndWipeLocal?.();
+            this.closeAuthDialog();
+          })();
+        });
+        body.append(wipe);
+      }
+      // アカウント削除（決定⑦）。設定パネルにも同じ導線がある
+      if (hooks.deleteAccount) {
+        const del = el('button', 'btn settings-delete auth-wide', 'アカウントを削除');
+        del.type = 'button';
+        del.addEventListener('click', () => {
+          void this.requestDeleteAccount();
+        });
+        body.append(del);
+        body.append(
+          el('p', 'auth-note', 'アカウントを削除すると、サーバーに保存されたデータとこの端末のデータがすべて消え、元に戻せません。'),
+        );
+      }
       return;
     }
     // 未ログイン（確認中も含む）：メールリンクとGoogleの2導線

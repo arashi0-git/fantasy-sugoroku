@@ -129,6 +129,20 @@ view.setAuthHooks({
   signInWithEmail: (email) => authService.signInWithEmail(email),
   signInWithGoogle: () => authService.signInWithGoogle(),
   signOut: () => authService.signOut(),
+  // アカウント削除（フェーズ4・決定⑦）：サーバーのプロフィール削除と端末の
+  // 初期化は同期層が担い、成功したらログアウトまで行う。認証ユーザー自体の
+  // 削除はクライアントからは行えない（サーバー側の管理操作が別途必要）
+  deleteAccount: async () => {
+    const result = await profileSync.deleteAccount();
+    if (!result.ok) return result;
+    await authService.signOut();
+    return { ok: true };
+  },
+  // ログアウト＋この端末のデータ消去（共有端末向け・§11）
+  signOutAndWipeLocal: async () => {
+    profileSync.resetLocalData();
+    await authService.signOut();
+  },
 });
 
 // プロフィールの端末間同期（ローカルファースト。サーバーは控え）。
@@ -160,6 +174,12 @@ const profileSync = new ProfileSync({
     else if (screen === 'collection') openCollection();
     if (extras) extras.profile = adopted;
   },
+});
+
+// 同期状態の表示（タイトルのアカウント行）：状態の実体は ProfileSync が持つ
+view.setSyncHooks({
+  getStatus: () => profileSync.getSyncStatus(),
+  subscribe: (listener) => profileSync.subscribeSyncStatus(listener),
 });
 
 /** プロフィールの保存経路：localStorage へ即保存し、同期層へも知らせる */

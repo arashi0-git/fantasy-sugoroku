@@ -69,5 +69,11 @@ export function createProfileStore(): ProfileStoreApi {
       const row = data as { updated_at: string };
       return { updatedAt: row.updated_at };
     },
+    async deleteOwnProfile(userId) {
+      // アカウント削除用。RLS で自分の行しか消せない。認証ユーザー自体の削除は
+      // 管理者APIが必要でクライアントからは行えない（publishable キーのみ・§8）
+      const { error } = await client.from('profiles').delete().eq('user_id', userId);
+      if (error) throw error;
+    },
   };
 }

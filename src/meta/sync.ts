@@ -10,7 +10,7 @@
 // サーバーに自分の行が無いアカウントは初期プロフィールで開始し（§7）、
 // その内容でサーバーに行を作る。引き継ぎダイアログは実装しない。
 
-import type { AuthState } from './auth';
+import type { AuthActionResult, AuthState } from './auth';
 import { defaultProfile, parseProfile, PROFILE_KEY, serializeProfile, type Profile } from './profile';
 
 /** 同期メタ（最終更新時刻・未送信フラグ・持ち主）の保存キー。fs-profile 本体とは分ける */
@@ -32,6 +32,8 @@ export interface ProfileStoreApi {
   fetchOwnProfile(userId: string): Promise<ProfileRow | null>;
   /** 自分の行を作成／更新し、サーバー側の updated_at を返す */
   upsertOwnProfile(userId: string, data: Profile): Promise<{ updatedAt: string }>;
+  /** 自分の行を削除する（アカウント削除用。RLS の範囲で自分の行だけが対象） */
+  deleteOwnProfile(userId: string): Promise<void>;
 }
 
 /** localStorage 互換の最小形（テスト差し替え用） */
@@ -71,6 +73,28 @@ function parseMeta(json: string | null): SyncMeta {
   }
 }
 
+/**
+ * 画面に出す同期状態（フェーズ4）。
+ * - signedOut：未ログイン（同期していない）
+ * - checking：ログイン状態または初回の突き合わせを確認中
+ * - pending：未送信の変更がある、または突き合わせが失敗して再試行待ち
+ * - synced：サーバーと揃っている
+ */
+export type SyncStatus = 'signedOut' | 'checking' | 'pending' | 'synced';
+
+/** 同期状態の導出（純粋関数）。入力は ProfileSync が持つ現在の状態そのもの */
+export function deriveSyncStatus(input: {
+  authStatus: AuthState['status'];
+  dirty: boolean;
+  reconciled: boolean;
+  reconcileFailed: boolean;
+}): SyncStatus {
+  if (input.authStatus === 'signedOut') return 'signedOut';
+  if (input.authStatus !== 'signedIn') return 'checking';
+  if (!input.reconciled) return input.reconcileFailed ? 'pending' : 'checking';
+  return input.dirty ? 'pending' : 'synced';
+}
+
 export interface ProfileSyncDeps {
   store: ProfileStoreApi;
   storage: KeyValueStorage;
@@ -91,6 +115,12 @@ export class ProfileSync {
   private pushing = false;
   /** ログイン直後の突き合わせが終わっているか（終わるまで送信は始めない） */
   private reconciled = false;
+  /** 直近で受けた認証状態（同期状態の導出に使う） */
+  private authStatus: AuthState['status'] = 'unknown';
+  /** 突き合わせが通信失敗で終わっているか（再試行待ちの表示に使う） */
+  private reconcileFailed = false;
+  private readonly statusListeners = new Set<(status: SyncStatus) => void>();
+  private lastStatus: SyncStatus | null = null;
   private unsubscribe: (() => void) | null = null;
 
   constructor(private readonly deps: ProfileSyncDeps) {
@@ -121,6 +151,86 @@ export class ProfileSync {
     this.meta = { ...this.meta, updatedAt: this.now(), dirty: true };
     this.writeMeta();
     this.schedulePush();
+    this.emitSyncStatus();
+  }
+
+  /** 現在の同期状態（画面表示用） */
+  getSyncStatus(): SyncStatus {
+    return deriveSyncStatus({
+      authStatus: this.authStatus,
+      dirty: this.meta.dirty,
+      reconciled: this.reconciled,
+      reconcileFailed: this.reconcileFailed,
+    });
+  }
+
+  /** 同期状態の変化を購読する。戻り値は購読解除関数（変化したときだけ呼ばれる） */
+  subscribeSyncStatus(listener: (status: SyncStatus) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
+  /** 同期状態を再計算し、変わっていれば購読者へ知らせる */
+  private emitSyncStatus(): void {
+    const next = this.getSyncStatus();
+    if (next === this.lastStatus) return;
+    this.lastStatus = next;
+    for (const listener of this.statusListeners) listener(next);
+  }
+
+  /**
+   * この端末のローカルデータだけを初期化する（サーバーには触らない）。
+   * 「ログアウト＋端末のデータ消去」（§11）と、アカウント削除の後始末で使う。
+   * 同期メタも初期化されるため、同じアカウントで再ログインすればサーバー側が正として取り込まれる。
+   */
+  resetLocalData(): void {
+    this.cancelTimer();
+    this.userId = null;
+    this.reconciled = false;
+    this.reconcileFailed = false;
+    this.meta = { ...FRESH_META };
+    this.writeMeta();
+    const fresh = defaultProfile();
+    try {
+      this.deps.storage.setItem(PROFILE_KEY, serializeProfile(fresh));
+    } catch {
+      /* 保存できない環境でも通知は行う */
+    }
+    this.deps.onProfileAdopted?.(fresh);
+    this.emitSyncStatus();
+  }
+
+  /**
+   * アカウント削除のうち、同期層が担う部分（フェーズ4・決定⑦）。
+   * サーバー側の自分の profiles 行を削除し、この端末のローカルデータも初期化する。
+   * 認証ユーザー自体の削除はクライアント（publishable キー）からは行えないため、
+   * 呼び出し側（main）がこの後にログアウトまで行う。認証レコードの完全削除には
+   * サーバー側の管理操作（Edge Function 等）が別途必要（§8：service_role は使わない）。
+   * サーバー削除に失敗した場合はローカルを一切触らず、失敗を返す。
+   */
+  async deleteAccount(): Promise<AuthActionResult> {
+    const userId = this.userId;
+    if (!userId) {
+      return { ok: false, message: 'ログインしていないため、アカウントを削除できませんでした。' };
+    }
+    this.cancelTimer();
+    // 送信中の更新が削除の直後に届いて行が復活しないよう、送信の完了を待つ（上限つき）
+    for (let i = 0; i < 60 && this.pushing; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    try {
+      await this.deps.store.deleteOwnProfile(userId);
+    } catch {
+      return {
+        ok: false,
+        message: 'サーバーのデータを削除できませんでした。通信環境を確認してもう一度お試しください。',
+      };
+    }
+    // 削除の間にログアウト／アカウント切替があった場合は、その状態を壊さない
+    if (this.userId === userId) this.resetLocalData();
+    return { ok: true };
   }
 
   /** 未送信分があれば今すぐ送る（タイトルへ戻ったとき・オンライン復帰時の保険） */
@@ -148,16 +258,24 @@ export class ProfileSync {
   }
 
   private onAuthState(state: AuthState): void {
+    this.authStatus = state.status;
     if (state.status === 'signedIn' && state.user) {
-      if (this.userId === state.user.id && this.reconciled) return;
+      if (this.userId === state.user.id && this.reconciled) {
+        this.emitSyncStatus();
+        return;
+      }
       this.userId = state.user.id;
       this.reconciled = false;
+      this.reconcileFailed = false;
+      this.emitSyncStatus();
       void this.reconcile();
     } else if (state.status === 'signedOut') {
       // ログアウト：同期は止めるが、端末のローカルの控えは消さない（§7）
       this.userId = null;
       this.reconciled = false;
+      this.reconcileFailed = false;
       this.cancelTimer();
+      this.emitSyncStatus();
     }
     // 'unknown'（確認中）は何もしない。確定してから動く
   }
@@ -172,9 +290,14 @@ export class ProfileSync {
     } catch {
       // 取得できない（オフライン等）間はローカルの控えで続ける。次回ログイン時や
       // オンライン復帰時に改めて突き合わせる。ゲームは止めない
+      if (this.userId === userId) {
+        this.reconcileFailed = true;
+        this.emitSyncStatus();
+      }
       return;
     }
     if (this.userId !== userId) return; // 途中でログアウト／切替があったら破棄
+    this.reconcileFailed = false;
 
     if (!row) {
       // サーバーに自分の行が無い＝このアカウントは新規。引き継ぎはしない
@@ -213,6 +336,7 @@ export class ProfileSync {
     this.reconciled = true;
     // 採用で置き換えた直後に未送信分が残るケースはないが、念のため予約だけ確認
     this.schedulePush();
+    this.emitSyncStatus();
   }
 
   /** プロフィールをローカルへ反映し、画面側へ通知する */
@@ -266,6 +390,7 @@ export class ProfileSync {
       // 送信失敗：未送信フラグを残すだけ（次回保存・ flush ・再ログインで再送される）
     } finally {
       this.pushing = false;
+      this.emitSyncStatus();
     }
   }
 
